@@ -1,0 +1,3 @@
+# My notes when implementing...
+
+To support app-defined behaviours, `AppStateMachine.s.dfy` and `Program.cs` are required to expose the interfaces.

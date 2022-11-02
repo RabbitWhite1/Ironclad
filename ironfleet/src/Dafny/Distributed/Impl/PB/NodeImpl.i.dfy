@@ -1,5 +1,6 @@
 include "Node.i.dfy"
-include "NetLock.i.dfy"
+include "NetPB.i.dfy"
+include "../../Common/Logic/Option.i.dfy"
 
 module NodeImpl_i {
 import opened Native__NativeTypes_s
@@ -8,10 +9,11 @@ import opened Environment_s
 import opened Types_i
 import opened Message_i
 import opened Impl_Node_i
-import opened NetLock_i
+import opened NetPB_i
 import opened Protocol_Node_i
 import opened Common__Util_i
 import opened Common__NetClient_i
+import opened Logic__Option_i
 
 class NodeImpl
 {
@@ -85,7 +87,7 @@ class NodeImpl
         if packets.Some? {
             ghost var sendEventLog;
             for i := 0 to |packets| - 1 {
-                ok, sendEventLog := SendPacket(netClient, packets[i], localAddr); 
+                ok, sendEventLog := SendPacket(netClient, Some(packets[i]), localAddr); 
                 netEventLog := netEventLog + sendEventLog;
             }
         } else {

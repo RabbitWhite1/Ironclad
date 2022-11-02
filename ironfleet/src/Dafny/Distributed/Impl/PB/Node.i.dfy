@@ -56,35 +56,41 @@ method NodeInitImpl(my_index:uint64, config:Config) returns (node:CNode)
     }
 }
 
-method NodeSendImpl(s:CNode) returns (s':CNode, packets:Option<seq<CPBPacket>>, ghost ios:seq<PBIo>)
+method NodeSendImpl(s:CNode) returns (s':CNode, packets:seq<CPBPacket>, ghost ios:seq<PBIo>)
     requires CNodeValid(s);
     // ensures  NodeSend(AbstractifyCNode(s), AbstractifyCNode(s'), ios);
     ensures  s'.my_index == s.my_index && s'.config == s.config;
     // TODO: modify for sequence of packets
-    // ensures  packets.Some? ==> ios[0].LIoOpSend? 
-    //                        && ios[0].s == AbstractifyCPBPacket(packets.v[0]);
-    // ensures    OptionCPBPacketValid(packet) 
-    //         && (packet.Some? ==> packet.v.src == s.config[s.my_index]); 
-    // ensures  packet.None? ==> ios == [] && s' == s;
+    ensures |ios| == |packets| 
+    ensures forall i:int :: 0 <= i < |packets| ==> ios[i].LIoOpSend? 
+                && ios[i].s == AbstractifyCPBPacket(packets[i]) 
+                && packets[i].src == s.config[s.my_index]; 
+    ensures |packets| == 0 ==> ios == [] && s' == s;
     ensures  CNodeValid(s');
 {
     if s.is_primary {
         var ssss := CNode(s.is_primary, s.value, s.my_index, s.config);
         s' := ssss;
-        var pkts := [];
-        for index := 0 to |s.config| - 1 {
+        ios := [];
+        packets := [];
+        for index := 0 to |s.config| - 1 
+            invariant |ios| == |packets|
+            invariant forall i:int :: 0 <= i < |packets| ==> ios[i].LIoOpSend?
+                && ios[i].s == AbstractifyCPBPacket(packets[i]) 
+                && packets[i].src == s.config[s.my_index]
+        {
             if index as uint64 != s.my_index {
                 var packet := LPacket(s.config[index], s.config[s.my_index], CUpdate(s.value));
-                ios := [LIoOpSend(AbstractifyCPBPacket(packet))];
-                pkts := pkts + [packet];
+                var io := LIoOpSend(AbstractifyCPBPacket(packet));
+                ios := ios + [io];
+                packets := packets + [packet];
                 print "I send Update to ", index, "\n";
             }
         }
-        packets := Some(pkts);
     } else {
         s' := s;
         ios := [];
-        packets := None();
+        packets := [];
     }
 }
 
