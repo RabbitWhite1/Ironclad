@@ -5,6 +5,7 @@
 /////////////////////////////////////////////////////////////////////////////
 include "../../Common/Framework/Environment.s.dfy"
 include "../../Services/Raft/AppStateMachine.s.dfy"
+include "../Common/UpperBound.s.dfy"
 include "Config.i.dfy"
 include "Types.i.dfy"
 
@@ -12,37 +13,44 @@ module Raft__Server_i {
 
 import opened Environment_s
 import opened AppStateMachine_s
+import opened Common__UpperBound_s
 import opened Raft__Config_i
 import opened Raft__Types_i
 
 datatype RaftServer = RaftServer(
   config:RaftServerConfig,
   role:RaftRole,
+  // for timeout
+  next_heartbeat_time:int,
+  next_election_time:int,
   // persistent state
-  currentTerm:int,
-  votedFor:int,
-  log:seq<AppRequest>,
+  current_term:int,
+  voted_for:int,
+  log:seq<LogEntry>,
   // volatile state on all servers
-  commitIndex:int,
-  lastApplied:int,
+  commit_index:int,
+  last_applied:int,
   // volatile state on leaders
-  nextIndex:map<int, int>,
-  matchIndex:map<int, int>,
+  next_index:map<int, int>,
+  match_index:map<int, int>,
   // App
   app:AppState
 )
 
 predicate RaftServerInit(server:RaftServer, config:RaftServerConfig) {
   && server.config == config
-  && server.currentTerm == 0
-  && server.votedFor == -1
+  && server.current_term == 0
+  && server.voted_for == -1
   && server.log == []
-  && server.commitIndex == 0
-  && server.lastApplied == 0
-  && server.nextIndex == map []
-  && server.matchIndex == map []
+  && server.commit_index == 0
+  && server.last_applied == 0
+  && server.next_index == map []
+  && server.match_index == map []
 }
 
+////////////////////////////////////////////////
+// Clock-related
+////////////////////////////////////////////////
 predicate SpontaneousIos(ios:seq<RaftIo>, clocks:int)
   requires 0<=clocks<=1
 {
@@ -56,6 +64,30 @@ function SpontaneousClock(ios:seq<RaftIo>) : ClockReading
   if SpontaneousIos(ios, 1) then ClockReading(ios[0].t) else ClockReading(0) // nonsense to avoid putting a precondition on this function
 }
 
+////////////////////////////////////////////////
+// Utils
+////////////////////////////////////////////////
+function RaftPrevLogIndex(s:RaftServer) : int
+{
+  if s.log == [] then 0 else s.log[|s.log|-1].index
+}
+
+function RaftPrevLogTerm(s:RaftServer) : int
+{
+  if s.log == [] then 0 else s.log[|s.log|-1].term
+}
+
+predicate RaftBroadcastToEveryone(config:RaftConfig, myidx:int, m:RaftMessage, sent_packets:seq<RaftPacket>)
+{
+  && |sent_packets| == |config.server_eps|
+  && 0 <= myidx < |config.server_eps|
+  && forall idx {:trigger sent_packets[idx]}{:trigger config.server_eps[idx]}{:trigger LPacket(config.server_eps[idx], config.server_eps[myidx], m)} ::
+      0 <= idx < |sent_packets| ==> sent_packets[idx] == LPacket(config.server_eps[idx], config.server_eps[myidx], m)
+}
+
+////////////////////////////////////////////////
+// Handle received packets
+////////////////////////////////////////////////
 predicate RaftServerNextHandleRequestVote(s:RaftServer, s':RaftServer, ios:seq<RaftIo>)
 {
   true
@@ -84,18 +116,21 @@ predicate RaftServerNextProcessPacket(s:RaftServer, s':RaftServer, ios:seq<RaftI
     else
       (
         && ios[0].LIoOpReceive?
-        && if ios[0].r.msg.RequestVote? then
+        && if ios[0].r.msg.RaftMessage_RequestVote? then
             RaftServerNextHandleRequestVote(s, s', ios)
-          else if ios[0].r.msg.RequestVoteReply? then
+          else if ios[0].r.msg.RaftMessage_RequestVoteReply? then
             RaftServerNextHandleRequestVoteReply(s, s', ios)
-          else if ios[0].r.msg.AppendEntries? then
+          else if ios[0].r.msg.RaftMessage_AppendEntries? then
             // Note: this is the only one that may requires a election timeout reset
             RaftServerNextHandleAppendEntries(s, s', ios)
-          else 
-            ios[0].r.msg.AppendEntriesReply? && RaftServerNextHandleAppendEntriesReply(s, s', ios)
+          else
+            ios[0].r.msg.RaftMessage_AppendEntriesReply? && RaftServerNextHandleAppendEntriesReply(s, s', ios)
       )
 }
 
+////////////////////////////////////////////////
+// Handle other events
+////////////////////////////////////////////////
 function {:opaque} ExtractSentPacketsFromIos(ios:seq<RaftIo>) : seq<RaftPacket>
   ensures forall p :: p in ExtractSentPacketsFromIos(ios) <==> LIoOpSend(p) in ios
 {
@@ -109,12 +144,39 @@ function {:opaque} ExtractSentPacketsFromIos(ios:seq<RaftIo>) : seq<RaftPacket>
 
 predicate RaftServerNextReadClockMaybeSendHeartbeat(s:RaftServer, s':RaftServer, clock:ClockReading, sent_packets:seq<RaftPacket>)
 {
-  true
+  && s.role.Leader?
+  && (
+    if clock.t < s.next_heartbeat_time then
+      s' == s && sent_packets == []
+    else
+      && s'.next_heartbeat_time == UpperBoundedAddition(clock.t, s.config.global_config.heartbeat_timeout, s.config.global_config.max_integer_value)
+      && RaftBroadcastToEveryone(
+        s.config.global_config, s.config.server_id, 
+        RaftMessage_AppendEntries(
+          s.current_term, s.config.server_id, 
+          RaftPrevLogIndex(s), RaftPrevLogTerm(s), 
+          [], s.commit_index),
+        sent_packets)
+      && s' == s.(next_heartbeat_time := s'.next_heartbeat_time)
+  )
 }
 
 predicate RaftServerNextReadClockMaybeStartElection(s:RaftServer, s':RaftServer, clock:ClockReading, sent_packets:seq<RaftPacket>)
 {
-  true
+  && (s.role.Follower? || s.role.Candidate?)
+  && (
+    if clock.t < s.next_election_time then
+      s' == s && sent_packets == []
+    else
+      && s'.next_election_time == UpperBoundedAddition(clock.t, s.config.global_config.heartbeat_timeout, s.config.global_config.max_integer_value)
+      && RaftBroadcastToEveryone(
+        s.config.global_config, s.config.server_id, 
+        RaftMessage_RequestVote(
+          s.current_term, s.config.server_id, 
+          RaftPrevLogIndex(s), RaftPrevLogTerm(s)),
+        sent_packets)
+      && s' == s.(next_election_time := s'.next_election_time)
+  )
 }
 
 predicate RaftServerNoReceiveNext(s:RaftServer, nextActionIndex:int, s':RaftServer, ios:seq<RaftIo>)

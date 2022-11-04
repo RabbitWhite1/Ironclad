@@ -1,9 +1,11 @@
-include "Types.i.dfy"
 include "../../Common/Collections/Sets.i.dfy"
 include "../../Common/Collections/Seqs.i.dfy"
+include "../Common/UpperBound.s.dfy"
+include "Types.i.dfy"
 
 module Raft__Config_i {
 import opened Raft__Types_i
+import opened Common__UpperBound_s
 import opened Native__Io_s
 import opened Collections__Sets_i
 import opened Collections__Seqs_i
@@ -13,7 +15,8 @@ datatype RaftConfig = RaftConfig(
   server_eps:seq<EndPoint>,
   min_election_timeout:int,
   max_election_timeout:int,
-  heartbeat_timeout:int
+  heartbeat_timeout:int,
+  max_integer_value:UpperBound
   )
 
 datatype RaftServerConfig = RaftServerConfig(
