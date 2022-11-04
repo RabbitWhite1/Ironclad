@@ -17,4 +17,9 @@ datatype RaftMessage =
   | RequestVoteReply(term:int, vote_granted:bool)
   | AppendEntries(term:int, leader_id:int, prev_log_index:int, prev_log_term:int, entries:seq<AppRequest>, leader_commit:int)
   | AppendEntriesReply(term:int, success:bool)
+
+datatype RaftRole = Follower | Candidate | Leader
+
+datatype ClockReading = ClockReading(t:int)
+
 }
