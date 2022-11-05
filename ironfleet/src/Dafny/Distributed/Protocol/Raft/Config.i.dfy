@@ -24,6 +24,12 @@ datatype RaftServerConfig = RaftServerConfig(
   global_config:RaftConfig
 )
 
+function RandInt(min:int, max:int):int
+  requires min <= max
+{
+  (min + max) / 2
+}
+
 function RaftMinQuorumSize(c:RaftConfig) : int
 {
   |c.server_eps|/2+1
