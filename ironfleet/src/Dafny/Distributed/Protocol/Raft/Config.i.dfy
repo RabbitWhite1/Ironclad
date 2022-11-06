@@ -1,5 +1,6 @@
 include "../../Common/Collections/Sets.i.dfy"
 include "../../Common/Collections/Seqs.i.dfy"
+include "../../Common/Collections/Maps2.s.dfy"
 include "../Common/UpperBound.s.dfy"
 include "Types.i.dfy"
 
@@ -9,6 +10,7 @@ import opened Common__UpperBound_s
 import opened Native__Io_s
 import opened Collections__Sets_i
 import opened Collections__Seqs_i
+import opened Collections__Maps2_s
 
 datatype RaftConfig = RaftConfig(
   client_eps:set<EndPoint>,
@@ -17,10 +19,10 @@ datatype RaftConfig = RaftConfig(
   max_election_timeout:int,
   heartbeat_timeout:int,
   max_integer_value:UpperBound
-  )
+)
 
 datatype RaftServerConfig = RaftServerConfig(
-  server_id:int,
+  server_ep:EndPoint,
   global_config:RaftConfig
 )
 
@@ -53,7 +55,7 @@ function WellFormedLRaftConfig(c:RaftConfig) : bool
 function WellFormedLRaftServerConfig(c:RaftServerConfig) : bool
 {
   && WellFormedLRaftConfig(c.global_config)
-  && 0 <= c.server_id
+  && c.server_ep in c.global_config.server_eps
 }
 
 } 

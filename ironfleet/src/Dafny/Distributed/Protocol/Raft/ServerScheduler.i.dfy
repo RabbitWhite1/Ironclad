@@ -14,8 +14,8 @@ datatype RaftServerScheduler = RaftServerScheduler(
 )
 
 predicate RaftServerSchedulerInit(sch:RaftServerScheduler, c:RaftServerConfig) 
-  requires WellFormedLRaftServerConfig(c)
 {
+  && WellFormedLRaftServerConfig(c)
   && RaftServerInit(sch.server, c)
   && sch.nextActionIndex == 0
 }
