@@ -3,6 +3,7 @@
 // This file defines behaviours of a server
 //
 /////////////////////////////////////////////////////////////////////////////
+include "../../Common/Logic/Option.i.dfy"
 include "../../Common/Framework/Environment.s.dfy"
 include "../../Services/Raft/AppStateMachine.s.dfy"
 include "../Common/UpperBound.s.dfy"
@@ -12,6 +13,7 @@ include "Types.i.dfy"
 
 module Raft__Server_i {
 
+import opened Logic__Option_i
 import opened Environment_s
 import opened AppStateMachine_s
 import opened Common__UpperBound_s
@@ -27,9 +29,9 @@ datatype RaftServer = RaftServer(
   next_heartbeat_time:int,
   next_election_time:int,
   // persistent state
-  current_leader:EndPoint,
+  current_leader:Option<EndPoint>,
   current_term:int,
-  voted_for:int,
+  voted_for:Option<EndPoint>,
   log:seq<LogEntry>,
   // volatile state on all servers
   commit_index:int,
@@ -45,7 +47,7 @@ datatype RaftServer = RaftServer(
 predicate RaftServerInit(server:RaftServer, config:RaftServerConfig) {
   && server.config == config
   && server.current_term == 0
-  && server.voted_for == -1
+  && server.voted_for == None()
   && server.log == []
   && server.commit_index == 0
   && server.last_applied == 0
@@ -139,7 +141,7 @@ predicate RaftServerMaybeStepDown(s:RaftServer, s':RaftServer, term:int)
 {
   if s.current_term < term then
     && s'.role == Follower
-    && s'.voted_for == -1
+    && s'.voted_for == None()
     && s'.current_term == term
   else
     s'.role == s.role
@@ -151,9 +153,9 @@ predicate RaftServerMaybeResetElectionTimeout(s:RaftServer, s':RaftServer, clock
   requires msg.RaftMessage_AppendEntries?
 {
   var global_config := s.config.global_config;
-  msg.leader_ep == s.current_leader ==> exists election_timeout :: (
-    && global_config.min_election_timeout <= election_timeout <= global_config.max_election_timeout
-    && s' == s.(next_election_time := UpperBoundedAddition(clock, election_timeout, global_config.max_integer_value))
+  s.current_leader.Some? && msg.leader_ep == s.current_leader.v ==> exists election_timeout :: (
+    && global_config.params.min_election_timeout <= election_timeout <= global_config.params.max_election_timeout
+    && s' == s.(next_election_time := UpperBoundedAddition(clock, election_timeout, global_config.params.max_integer_value))
   )
 }
 
@@ -311,7 +313,7 @@ predicate RaftServerNextReadClockMaybeSendHeartbeat(s:RaftServer, s':RaftServer,
     if clock.t < s.next_heartbeat_time then
       s' == s && sent_packets == []
     else
-      && s'.next_heartbeat_time == UpperBoundedAddition(clock.t, s.config.global_config.heartbeat_timeout, s.config.global_config.max_integer_value)
+      && s'.next_heartbeat_time == UpperBoundedAddition(clock.t, s.config.global_config.params.heartbeat_timeout, s.config.global_config.params.max_integer_value)
       && RaftBroadcastToEveryone(
         s.config.global_config, s.config.server_ep, 
         RaftMessage_AppendEntries(
@@ -330,7 +332,7 @@ predicate RaftServerNextReadClockMaybeStartElection(s:RaftServer, s':RaftServer,
     if clock.t < s.next_election_time then
       s' == s && sent_packets == []
     else
-      && s'.next_election_time == UpperBoundedAddition(clock.t, s.config.global_config.heartbeat_timeout, s.config.global_config.max_integer_value)
+      && s'.next_election_time == UpperBoundedAddition(clock.t, s.config.global_config.params.heartbeat_timeout, s.config.global_config.params.max_integer_value)
       && RaftBroadcastToEveryone(
         s.config.global_config, s.config.server_ep, 
         RaftMessage_RequestVote(

@@ -30,7 +30,7 @@ datatype RaftState = RaftState(
 predicate RaftInit(s:RaftState, c:RaftConfig)
 {
   && s.config == c
-  && WellFormedLRaftConfig(c)
+  && WellFormedRaftConfig(c)
   && LEnvironment_Init(s.environment)
   && |s.serverSchedulers| == |c.server_eps|
   && (forall sch :: sch in s.serverSchedulers ==> RaftServerSchedulerInit(sch, RaftServerConfig(sch.server.config.server_ep, c)))

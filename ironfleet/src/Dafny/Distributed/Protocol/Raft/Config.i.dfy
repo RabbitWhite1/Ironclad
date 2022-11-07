@@ -12,13 +12,17 @@ import opened Collections__Sets_i
 import opened Collections__Seqs_i
 import opened Collections__Maps2_s
 
-datatype RaftConfig = RaftConfig(
-  client_eps:set<EndPoint>,
-  server_eps:seq<EndPoint>,
+datatype RaftParam = RaftParam(
   min_election_timeout:int,
   max_election_timeout:int,
   heartbeat_timeout:int,
   max_integer_value:UpperBound
+)
+
+datatype RaftConfig = RaftConfig(
+  // client_eps:set<EndPoint>,
+  server_eps:seq<EndPoint>,
+  params:RaftParam
 )
 
 datatype RaftServerConfig = RaftServerConfig(
@@ -42,19 +46,19 @@ predicate ReplicasDistinct(server_eps:seq<EndPoint>, i:int, j:int)
   0 <= i < |server_eps| && 0 <= j < |server_eps| && server_eps[i] == server_eps[j] ==> i == j
 }
 
-function WellFormedLRaftConfig(c:RaftConfig) : bool
+function WellFormedRaftConfig(c:RaftConfig) : bool
 {
   && |c.server_eps| > 0
-  && c.min_election_timeout > 0
-  && c.max_election_timeout > 0
-  && c.min_election_timeout < c.max_election_timeout
-  && c.heartbeat_timeout > 0
+  && c.params.min_election_timeout > 0
+  && c.params.max_election_timeout > 0
+  && c.params.min_election_timeout < c.params.max_election_timeout
+  && c.params.heartbeat_timeout > 0
   && forall i,j :: ReplicasDistinct(c.server_eps, i, j)
 }
 
-function WellFormedLRaftServerConfig(c:RaftServerConfig) : bool
+function WellFormedRaftServerConfig(c:RaftServerConfig) : bool
 {
-  && WellFormedLRaftConfig(c.global_config)
+  && WellFormedRaftConfig(c.global_config)
   && c.server_ep in c.global_config.server_eps
 }
 

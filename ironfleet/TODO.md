@@ -1,0 +1,36 @@
+- Spec
+  - [x] AbstractService.s.dfy: a serevice specification that hides replications from client.
+
+- Protocol
+  - [ ] DistributedSystem.i.dfy
+    - [x] messages and types
+    - [x] define protocol-level state and its init/next
+    - [ ] define behavior of servers
+      - [x] scheduler to support actions (including timeout checking).
+      - [ ] server
+        - [x] init
+        - [ ] next
+          - [ ] handle requestVote
+          - [ ] handle requestVoteReply
+          - [x] handle appendEntries
+          - [x] handle appendEntriesReply
+          - [ ] client request
+          - [ ] client response
+
+- Implementation
+  - [ ] Host.i.dfy (`host_init` and `host_next`)
+    - [x] host_init
+      - [x] Concrete server definitions
+      - [x] cmdline parser
+    - [ ] host_next
+      - [ ] message parsing and marshaling
+      - [ ] server
+        - [ ] handle messages
+          - [ ] RequestVote
+          - [ ] RequestVoteReply
+          - [ ] appendEntries
+          - [ ] appendEntriesReply
+          - [ ] client request
+          - [ ] client response
+
+- proof
