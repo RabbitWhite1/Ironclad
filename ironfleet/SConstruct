@@ -372,6 +372,10 @@ atexit.register(display_build_status)
 # env.DotnetBuild('bin/CreateIronServiceCerts.dll', 'src/CreateIronServiceCerts/CreateIronServiceCerts.csproj')
 # env.DotnetBuild('bin/TestIoFramework.dll', 'src/TestIoFramework/TestIoFramework.csproj')
 
-verify_dafny_file('src/Dafny/Distributed/Services/PB/Main.i.dfy')
-env.DafnyCompile('src/Dafny/Distributed/Services/PB/Main.i.cs', 'src/Dafny/Distributed/Services/PB/Main.i.dfy')
-env.DotnetBuild('bin/IronPBServer.dll', 'src/IronPBServer/IronPBServer.csproj')
+# verify_dafny_file('src/Dafny/Distributed/Services/PB/Main.i.dfy')
+# env.DafnyCompile('src/Dafny/Distributed/Services/PB/Main.i.cs', 'src/Dafny/Distributed/Services/PB/Main.i.dfy')
+# env.DotnetBuild('bin/IronPBServer.dll', 'src/IronPBServer/IronPBServer.csproj')
+
+verify_dafny_file('src/Dafny/Distributed/Services/Simplest/Main.i.dfy')
+env.DafnyCompile('src/Dafny/Distributed/Services/Simplest/Main.i.cs', 'src/Dafny/Distributed/Services/Simplest/Main.i.dfy')
+env.DotnetBuild('bin/IronSimplestServer.dll', 'src/IronSimplestServer/IronSimplestServer.csproj')
