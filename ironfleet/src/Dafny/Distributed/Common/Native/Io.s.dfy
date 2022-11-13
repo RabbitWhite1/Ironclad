@@ -85,6 +85,8 @@ type NetEvent = LIoOp<EndPoint, seq<byte>>
 
 function MaxPacketSize() : int { 0xFFFF_FFFF_FFFF_FFFF }
 
+function MaxEndpointSize() : int { 0x10_0000 }
+
 predicate ValidPhysicalAddress(endPoint:EndPoint)
 {
   |endPoint.public_key| < 0x10_0000 // < 1 MB

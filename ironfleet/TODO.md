@@ -33,4 +33,4 @@
           - [ ] client request
           - [ ] client response
 
-- proof
+- additional lemmas for proof

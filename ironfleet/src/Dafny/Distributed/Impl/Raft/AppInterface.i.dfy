@@ -1,7 +1,7 @@
 include "../../Common/Collections/Maps.i.dfy"
 include "../Common/GenericMarshalling.i.dfy"
 include "../Common/NodeIdentity.i.dfy"
-include "../../Services/RSL/AppStateMachine.s.dfy"
+include "../../Services/Raft/AppStateMachine.s.dfy"
 
 module Raft__AppInterface_i {
 import opened Native__Io_s

@@ -1,28 +1,37 @@
-include "../../Services/Raft/AppStateMachine.s.dfy"
+// include "../../Services/Raft/AppStateMachine.s.dfy"
 include "../../Common/Framework/Environment.s.dfy"
+include "../../Common/Logic/Option.i.dfy"
 include "../../Common/Native/Io.s.dfy"
+include "../../Common/Native/NativeTypes.s.dfy"
+include "../../Protocol/Raft/Types.i.dfy"
+include "../../Protocol/Common/NodeIdentity.i.dfy"
+include "../Common/NodeIdentity.i.dfy"
+include "../Common/NetClient.i.dfy"
 include "AppInterface.i.dfy"
 include "CTypes.i.dfy"
+include "Config.i.dfy"
 
 module Raft__CMessage_i {
 
+// import opened AppStateMachine_s
+import opened Environment_s
+import opened Logic__Option_i
+import opened Native__Io_s
+import opened Native__NativeTypes_s
+import opened Raft__Types_i
+import opened Common__NetClient_i
+import opened Common__NodeIdentity_i
+import opened Concrete_NodeIdentity_i
 import opened Raft__AppInterface_i
 import opened Raft__CTypes_i
-import opened AppStateMachine_s
-import opened Environment_s
-import opened Native__Io_s
-
-datatype CLogEntry = CLogEntry(term:uint64, index:uint64, req:CAppRequest, is_commited:bool)
-
-predicate CLogEntryValid(entry:CLogEntry) {
-  && entry.term > 0 && entry.index > 0
-}
+import opened Raft__ConfigState_i
 
 datatype CMessage =
-    CMessage_RequestVote(term:uint64, candidate_ep:EndPoint, last_log_index:uint64, last_log_term:uint64)
-  | CMessage_RequestVoteReply(term:uint64, vote_granted:bool)
+    CMessage_Invalid()
+  | CMessage_RequestVote(term:uint64, candidate_ep:EndPoint, last_log_index:uint64, last_log_term:uint64)
+  | CMessage_RequestVoteReply(term:uint64, vote_granted:uint64)
   | CMessage_AppendEntries(term:uint64, leader_ep:EndPoint, prev_log_index:uint64, prev_log_term:uint64, entries:seq<CLogEntry>, leader_commit:uint64)
-  | CMessage_AppendEntriesReply(term:uint64, success:bool, match_index:uint64)
+  | CMessage_AppendEntriesReply(term:uint64, success:uint64, match_index:uint64)
 
 datatype CPacket = CPacket(dst:EndPoint, src:EndPoint, msg:CMessage)
 
@@ -30,14 +39,95 @@ datatype CBroadcast = CBroadcast(src:EndPoint, dsts:seq<EndPoint>, msg:CMessage)
 
 datatype OutboundPackets = Broadcast(broadcast:CBroadcast) | OutboundPacket(p:Option<CPacket>) | PacketSequence(s:seq<CPacket>)
 
+predicate method ValidRequestVote(c:CMessage)
+{
+  c.CMessage_RequestVote? ==> EndPointIsValidPublicKey(c.candidate_ep)
+}
+
+predicate method ValidAppendEntries(c:CMessage)
+{
+  && c.CMessage_AppendEntries? ==> EndPointIsValidPublicKey(c.leader_ep)
+  && ValidLogEntrySeq(c.entries)
+}
+
+// CMessage
 predicate CMessageIsAbstractable(msg:CMessage) {
   // TODO: unlikely all are true
   match msg {
+    case CMessage_Invalid() => true
     case CMessage_RequestVote(_, _, _, _) => true
     case CMessage_RequestVoteReply(_, _) => true
     case CMessage_AppendEntries(_, _, _, _, _, _) => true
     case CMessage_AppendEntriesReply(_, _, _) => true
   }
 }
+
+function AbstractifyCMessageToRaftMessage(msg:CMessage) : RaftMessage
+  requires CMessageIsAbstractable(msg)
+{
+  match msg
+    case CMessage_Invalid => RaftMessage_Invalid()
+    case CMessage_RequestVote(term, candidate_ep, last_log_index, last_log_term) => RaftMessage_RequestVote(term as int, candidate_ep, last_log_index as int, last_log_term as int)
+    case CMessage_RequestVoteReply(term, vote_granted) => RaftMessage_RequestVoteReply(term as int, vote_granted == 1)
+    case CMessage_AppendEntries(term, leader_ep, prev_log_index, prev_log_term, entries, leader_commit) => RaftMessage_AppendEntries(term as int, leader_ep, prev_log_index as int, prev_log_term as int, AbstractifyCLogEntrySeqToRaftLogEntrySeq(entries), leader_commit as int)
+    case CMessage_AppendEntriesReply(term, success, match_index) => RaftMessage_AppendEntriesReply(term as int, success == 1, match_index as int)
+}
+
+// CPacket
+predicate CPacketIsAbstractable(cp:CPacket)
+{
+  && CMessageIsAbstractable(cp.msg)
+  && EndPointIsValidPublicKey(cp.src)
+  && EndPointIsValidPublicKey(cp.dst)
+}
+
+function AbstractifyCPacketToRaftPacket(cp: CPacket): RaftPacket
+  ensures CPacketIsAbstractable(cp) ==> AbstractifyCPacketToRaftPacket(cp) == LPacket(AbstractifyEndPointToNodeIdentity(cp.dst), AbstractifyEndPointToNodeIdentity(cp.src), AbstractifyCMessageToRaftMessage(cp.msg))
+{
+  if (CPacketIsAbstractable(cp)) then
+    LPacket(AbstractifyEndPointToNodeIdentity(cp.dst), AbstractifyEndPointToNodeIdentity(cp.src), AbstractifyCMessageToRaftMessage(cp.msg))
+  else
+    var x:RaftPacket :| (true); x
+}
+
+predicate CBroadcastIsAbstractable(broadcast:CBroadcast) 
+{
+  || broadcast.CBroadcastNop?
+  || (&& broadcast.CBroadcast? 
+     && EndPointIsValidPublicKey(broadcast.src)
+     && (forall i :: 0 <= i < |broadcast.dsts| ==> EndPointIsValidPublicKey(broadcast.dsts[i]))
+     && CMessageIsAbstractable(broadcast.msg))
+}
+
+function {:opaque} BuildLBroadcast(src:NodeIdentity, dsts:seq<NodeIdentity>, m:RaftMessage):seq<RaftPacket>
+  ensures |BuildLBroadcast(src, dsts, m)| == |dsts|
+  ensures forall i :: 0 <= i < |dsts| ==> BuildLBroadcast(src, dsts, m)[i] == LPacket(dsts[i], src, m)
+{
+  if |dsts| == 0 then []
+  else [LPacket(dsts[0], src, m)] + BuildLBroadcast(src, dsts[1..], m)
+}
+
+function AbstractifyCBroadcastToRaftPacketSeq(broadcast:CBroadcast) : seq<RaftPacket>
+  requires CBroadcastIsAbstractable(broadcast)
+{
+  match broadcast
+    case CBroadcast(_,_,_) => BuildLBroadcast(AbstractifyEndPointToNodeIdentity(broadcast.src), 
+                                              AbstractifyEndPointsToNodeIdentities(broadcast.dsts), 
+                                              AbstractifyCMessageToRaftMessage(broadcast.msg))
+    case CBroadcastNop => []
+}
+
+// OutboundPackets
+predicate OutboundPacketsHasCorrectSrc(out:OutboundPackets, me:EndPoint)
+{
+  match out
+    case Broadcast(CBroadcast(src, _, _)) => src == me
+    case Broadcast(CBroadcastNop()) => true
+    case OutboundPacket(p) => p.Some? ==> p.v.src == me
+    case PacketSequence(s) => (forall p :: p in s ==> p.src == me)
+//    case OutboundPacket(Some(p)) => p.src == me
+//    case OutboundPacket(None()) => true
+}
+
 
 }

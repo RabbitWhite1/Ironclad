@@ -10,6 +10,7 @@ include "../../Services/Raft/AppStateMachine.s.dfy"
 include "../Common/GenericMarshalling.i.dfy"
 include "../Common/NetClient.i.dfy"
 include "Config.i.dfy"
+include "PacketParsing.i.dfy"
 
 module Raft__ServerImpl_i {
 
@@ -24,6 +25,7 @@ import opened Common__GenericMarshalling_i
 import opened Common__NetClient_i
 import opened AppStateMachine_s
 import opened Raft__ConfigState_i
+import opened Raft__PacketParsing_i
 
 class ServerImpl
 {
@@ -53,6 +55,8 @@ class ServerImpl
 
   var app_state:AppStateMachine;
 
+  ghost var repr : set<object>;
+
   constructor() {
     net_client := null;
     role := Follower;
@@ -67,9 +71,22 @@ class ServerImpl
     next_index := map[];
     match_index := map[];
     num_replicated := [];
-    msg_grammar := 
     var app_s := AppStateMachine.Initialize();
     app_state := app_s;
+  }
+
+  predicate Valid()
+    reads this
+    reads this.app_state
+    reads if net_client != null then NetClientIsValid.reads(net_client) else {}
+  {
+    && (0 <= nextActionIndex as int < 10)
+    && net_client != null
+    && NetClientIsValid(net_client)
+    && EndPoint(net_client.MyPublicKey()) == local_addr
+    && EndPoint(net_client.MyPublicKey()) == config.server_ep
+    && repr == { this } + NetClientRepr(net_client)
+    && msg_grammar == CMessage_grammar()
   }
 
   function AbstractifyToRaftServer() : RaftServer
@@ -115,8 +132,16 @@ class ServerImpl
     this.config := config;
     this.net_client := nc;
     this.nextActionIndex := 0;
-    this.msg_grammar := CMessage_grammar();
+    // TODO: uncomment
+    // this.msg_grammar := CMessage_grammar();
     ok := true;
+  }
+
+  function Env() : HostEnvironment
+    requires net_client != null
+    reads this, NetClientIsValid.reads(net_client)
+  {
+    net_client.env
   }
 }
 }

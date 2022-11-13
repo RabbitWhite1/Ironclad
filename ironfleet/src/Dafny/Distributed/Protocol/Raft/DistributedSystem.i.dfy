@@ -54,6 +54,7 @@ predicate RaftNextCommon(s:RaftState, s':RaftState)
   && s.config == s'.config
   && LEnvironment_Next(s.environment, s'.environment)
 }
+
 predicate RaftNextServer(s:RaftState, s':RaftState, idx:int, ios:seq<RaftIo>)
 {
   && RaftNextCommon(s, s')

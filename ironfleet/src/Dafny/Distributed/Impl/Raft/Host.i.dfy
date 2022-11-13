@@ -60,7 +60,7 @@ function ParseCommandLineConfiguration(args:seq<seq<byte>>) : ConcreteConfigurat
   config
 }
 
-method {:timeLimitMultiplier 4} HostInitImpl(ghost env:HostEnvironment, netc:NetClient, args:seq<seq<byte>>) returns (
+method HostInitImpl(ghost env:HostEnvironment, netc:NetClient, args:seq<seq<byte>>) returns (
     ok:bool,
     host_state:HostState
 )
@@ -77,6 +77,7 @@ method {:timeLimitMultiplier 4} HostInitImpl(ghost env:HostEnvironment, netc:Net
   print "My ep is: ", ep, "\n";
 
   var server_config := InitServerConfigState(ep, server_eps);
+  assert ep in server_config.global_config.server_eps;
   host_state := CScheduler(server.AbstractifyToRaftServerScheduler(), server);
 }
 
@@ -90,11 +91,10 @@ method HostNextImpl(ghost env:HostEnvironment, host_state:HostState)
   ghost ios:seq<LIoOp<EndPoint, seq<byte>>>
 )
 {
-  ok := true;
-  host_state' := host_state;
-  recvs := [];
-  clocks := [];
-  sends := [];
-  ios := [];
+  var raft_schedule:RaftServerScheduler;
+  var server_impl:ServerImpl := new ServerImpl();
+  host_state' := CScheduler(raft_schedule, server_impl);
+
+  // var okay, netEventLog, abstract_ios := Server_Next_Main(host_state.server_impl);
 }
 }
