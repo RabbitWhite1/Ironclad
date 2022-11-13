@@ -349,6 +349,7 @@ atexit.register(display_build_status)
 #   Create dependencies
 #
 ####################################################################
+env.DotnetBuild('bin/CreateIronServiceCerts.dll', 'src/CreateIronServiceCerts/CreateIronServiceCerts.csproj')
 
 # verify_dafny_file('src/Dafny/Distributed/Services/Lock/Main.i.dfy')
 # verify_dafny_file('src/Dafny/Distributed/Services/SHT/Main.i.dfy')
@@ -369,7 +370,6 @@ atexit.register(display_build_status)
 # env.DafnyCompile('src/Dafny/Distributed/Services/Lock/Main.i.cs', 'src/Dafny/Distributed/Services/Lock/Main.i.dfy')
 # env.DotnetBuild('bin/IronLockServer.dll', 'src/IronLockServer/IronLockServer.csproj')
 
-# env.DotnetBuild('bin/CreateIronServiceCerts.dll', 'src/CreateIronServiceCerts/CreateIronServiceCerts.csproj')
 # env.DotnetBuild('bin/TestIoFramework.dll', 'src/TestIoFramework/TestIoFramework.csproj')
 
 # verify_dafny_file('src/Dafny/Distributed/Services/PB/Main.i.dfy')

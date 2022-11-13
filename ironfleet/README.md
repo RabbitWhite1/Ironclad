@@ -260,6 +260,35 @@ The client's output will primarily consist of reports of the form `#req
 We haven't implemented crash recovery, so if you restart a server its state will
 be empty.
 
+## IronRaft - Counter
+
+To run the counter service replicated with IronRSL, you should ideally use
+four different machines, but in a pinch you can use four separate windows on
+the same machine.
+
+The client has reasonable defaults that you can override with key=value
+command-line arguments. Run the client with no arguments to get detailed usage
+information. Make sure your firewall isn't blocking the TCP ports you use.
+
+To test the IronRSL counter on a single machine, you can do the following.
+
+First, create certificates with:
+```
+  dotnet bin/CreateIronServiceCerts.dll outputdir=certs name=MyCounter type=IronRaftCounter addr1=127.0.0.1 port1=4001 addr2=127.0.0.1 port2=4002 addr3=127.0.0.1 port3=4003
+```
+
+Then, run each of the following three server commands, each in a different window.
+```
+  dotnet bin/IronRaftServer.dll certs/MyCounter.IronRaftCounter.service.txt certs/MyCounter.IronRaftCounter.server1.private.txt
+  dotnet bin/IronRaftServer.dll certs/MyCounter.IronRaftCounter.service.txt certs/MyCounter.IronRaftCounter.server2.private.txt
+  dotnet bin/IronRaftServer.dll certs/MyCounter.IronRaftCounter.service.txt certs/MyCounter.IronRaftCounter.server3.private.txt
+```
+
+Finally, run this client command in yet another window:
+```
+  dotnet bin/IronRSLCounterClient.dll certs/MyCounter.IronRSLCounter.service.txt nthreads=10 duration=30 print=true
+```
+
 # Custom Replicated Services
 
 IronRSL-Counter and IronRSL-KV are examples showing how to write a service in C#

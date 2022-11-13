@@ -140,6 +140,12 @@ class ServerImpl
     this.local_addr := EndPoint(net_client.MyPublicKey());
     this.msg_grammar := CMessage_grammar();
     this.repr := { this } + NetClientRepr(net_client);
+    this.current_leader := Some(this.config.global_config.server_eps[0]);
+    if this.current_leader.Some? && this.config.server_ep == this.current_leader.v {
+      this.role := Leader;
+    } else{
+      this.role := Follower;
+    }
     ok := true;
   }
 

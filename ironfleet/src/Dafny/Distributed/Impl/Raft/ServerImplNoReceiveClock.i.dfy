@@ -78,7 +78,7 @@ method Server_Next_NoReceive_ReadClock(server_impl:ServerImpl)
         var packets_sent := Broadcast(packets);
         ok, log_tail, ios_tail := DeliverOutboundPackets(server_impl, packets_sent);
         if (!ok) { return; }
-        print "I broadcast heartbeat!";
+        print "I broadcast heartbeat!\n";
         ios := ios_head + ios_tail;
         net_event_log := log_head + log_tail;
         assert forall i::0<=i<|log_tail| ==> AbstractifyNetEventToRaftIo(log_tail[i]) == ios_tail[i];
@@ -96,7 +96,7 @@ method Server_Next_NoReceive_ReadClock(server_impl:ServerImpl)
         var next_election_time := UpperBoundedAdditionImpl(clock.t, next_election_delta, const_params.max_integer_value);
         server_impl.next_election_time := next_election_time;
         if (!ok) { return; }
-        print "My election timeout!!";
+        print "My election timeout!!\n";
         ios := [io0];
         net_event_log := [netEvent0];
       } else {
