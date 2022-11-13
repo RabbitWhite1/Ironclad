@@ -76,7 +76,7 @@ predicate ConfigStateIsAbstractable(config:ConfigState)
 predicate ConfigStateIsValid(config:ConfigState)
   ensures ConfigStateIsValid(config) ==> SeqIsUnique(config.server_eps)
 {
-  && 0 < |config.server_eps| < 0xffff_ffff_ffff_ffff
+  && 0 < |config.server_eps| < 0x1_0000_0000_0000_0000
   && ConfigStateIsAbstractable(config)
   && ParamStateIsValid(config.params)
   && RaftMinQuorumSize(AbstractifyConfigStateToRaftConfig(config)) <= |config.server_eps|
@@ -95,6 +95,13 @@ datatype ServerConfigState = ServerConfigState(
   global_config:ConfigState
 )
 
+predicate ServerConfigStateIsValid(sconfig:ServerConfigState)
+{
+  && EndPointIsValidPublicKey(sconfig.server_ep)
+  && ConfigStateIsValid(sconfig.global_config)
+  && sconfig.server_ep in sconfig.global_config.server_eps
+}
+
 function AbstractifyServerConfigStateToRaftServerConfig(server_config:ServerConfigState) : RaftServerConfig
 {
   RaftServerConfig(
@@ -104,9 +111,16 @@ function AbstractifyServerConfigStateToRaftServerConfig(server_config:ServerConf
 }
 
 method InitServerConfigState(my_ep:EndPoint, eps:seq<EndPoint>) returns (sc:ServerConfigState)
+  requires my_ep in eps
+  requires 0 < |eps| < 0x1_0000_0000_0000_0000
+  requires forall ep :: ep in eps ==> EndPointIsValidPublicKey(ep)
+  requires SeqIsUnique(eps)
   ensures sc.server_ep == my_ep
   ensures sc.global_config.server_eps == eps
   ensures sc.global_config.params == StaticParams()
+  ensures ParamStateIsValid(sc.global_config.params)
+  ensures ServerConfigStateIsValid(sc)
+  ensures WellFormedRaftConfig(AbstractifyConfigStateToRaftConfig(sc.global_config))
 {
   var params := StaticParams(); 
   var global_config := ConfigState(eps, params);

@@ -81,6 +81,11 @@ predicate CPacketIsAbstractable(cp:CPacket)
   && EndPointIsValidPublicKey(cp.dst)
 }
 
+predicate CPacketSeqIsAbstractable(cps:seq<CPacket>)
+{
+  forall i :: 0 <= i < |cps| ==> CPacketIsAbstractable(cps[i])
+}
+
 function AbstractifyCPacketToRaftPacket(cp: CPacket): RaftPacket
   ensures CPacketIsAbstractable(cp) ==> AbstractifyCPacketToRaftPacket(cp) == LPacket(AbstractifyEndPointToNodeIdentity(cp.dst), AbstractifyEndPointToNodeIdentity(cp.src), AbstractifyCMessageToRaftMessage(cp.msg))
 {
@@ -88,6 +93,15 @@ function AbstractifyCPacketToRaftPacket(cp: CPacket): RaftPacket
     LPacket(AbstractifyEndPointToNodeIdentity(cp.dst), AbstractifyEndPointToNodeIdentity(cp.src), AbstractifyCMessageToRaftMessage(cp.msg))
   else
     var x:RaftPacket :| (true); x
+}
+
+function {:opaque} AbstractifySeqOfCPacketsToSeqOfRaftPackets(cps:seq<CPacket>) : seq<RaftPacket>
+  requires CPacketSeqIsAbstractable(cps)
+  ensures |cps| == |AbstractifySeqOfCPacketsToSeqOfRaftPackets(cps)|
+  ensures forall i :: 0 <= i < |cps| ==> AbstractifySeqOfCPacketsToSeqOfRaftPackets(cps)[i] == AbstractifyCPacketToRaftPacket(cps[i])
+{
+  if |cps| == 0 then []
+  else [AbstractifyCPacketToRaftPacket(cps[0])] + AbstractifySeqOfCPacketsToSeqOfRaftPackets(cps[1..])
 }
 
 predicate CBroadcastIsAbstractable(broadcast:CBroadcast) 
@@ -118,6 +132,15 @@ function AbstractifyCBroadcastToRaftPacketSeq(broadcast:CBroadcast) : seq<RaftPa
 }
 
 // OutboundPackets
+predicate OutboundPacketsIsAbstractable(out:OutboundPackets)
+{
+  match out
+    case Broadcast(broadcast) => CBroadcastIsAbstractable(broadcast)
+    case OutboundPacket(Some(p)) => CPacketIsAbstractable(p)
+    case OutboundPacket(None()) => true
+    case PacketSequence(s) => CPacketSeqIsAbstractable(s)
+} 
+
 predicate OutboundPacketsHasCorrectSrc(out:OutboundPackets, me:EndPoint)
 {
   match out
@@ -128,6 +151,16 @@ predicate OutboundPacketsHasCorrectSrc(out:OutboundPackets, me:EndPoint)
 //    case OutboundPacket(Some(p)) => p.src == me
 //    case OutboundPacket(None()) => true
 }
+
+function AbstractifyOutboundCPacketsToSeqOfRaftPackets(out:OutboundPackets) : seq<RaftPacket>
+  requires OutboundPacketsIsAbstractable(out)
+{
+  match out
+    case Broadcast(broadcast) => AbstractifyCBroadcastToRaftPacketSeq(broadcast)
+    case OutboundPacket(Some(p)) => [AbstractifyCPacketToRaftPacket(p)]
+    case OutboundPacket(None()) => [] 
+    case PacketSequence(s) => AbstractifySeqOfCPacketsToSeqOfRaftPackets(s)
+} 
 
 
 }

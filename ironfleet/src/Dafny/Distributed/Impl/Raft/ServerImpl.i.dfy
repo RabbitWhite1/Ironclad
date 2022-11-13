@@ -80,8 +80,9 @@ class ServerImpl
     reads this.app_state
     reads if net_client != null then NetClientIsValid.reads(net_client) else {}
   {
-    && (0 <= nextActionIndex as int < 10)
+    && (0 <= nextActionIndex as int < RaftServerNumActions())
     && net_client != null
+    && ServerConfigStateIsValid(config)
     && NetClientIsValid(net_client)
     && EndPoint(net_client.MyPublicKey()) == local_addr
     && EndPoint(net_client.MyPublicKey()) == config.server_ep
@@ -126,14 +127,19 @@ class ServerImpl
   ) returns (ok:bool)
     requires env.Valid() && env.ok.ok()
     requires NetClientIsValid(nc)
+    requires ServerConfigStateIsValid(config)
+    requires EndPoint(nc.MyPublicKey()) == config.server_ep
     requires WellFormedRaftServerConfig(AbstractifyServerConfigStateToRaftServerConfig(config))
     modifies this
+    ensures Valid()
+    ensures Env() == nc.env
   {
     this.config := config;
     this.net_client := nc;
     this.nextActionIndex := 0;
-    // TODO: uncomment
-    // this.msg_grammar := CMessage_grammar();
+    this.local_addr := EndPoint(net_client.MyPublicKey());
+    this.msg_grammar := CMessage_grammar();
+    this.repr := { this } + NetClientRepr(net_client);
     ok := true;
   }
 

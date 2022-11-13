@@ -35,20 +35,22 @@ method Server_Next_ProcessPacketX(server_impl:ServerImpl)
   requires server_impl.Valid()
   requires ConfigStateIsValid(server_impl.config.global_config)
   modifies server_impl, server_impl.repr, server_impl.net_client;
-  // ensures server_impl.repr == old(server_impl.repr)
-  // ensures server_impl.net_client != null
-  // ensures ok == NetClientOk(server_impl.net_client)
-  // ensures server_impl.Env().Valid() && server_impl.Env().ok.ok() ==> ok
-  // ensures server_impl.Env() == old(server_impl.Env());
-  // ensures ok ==> 
-  //           && server_impl.Valid()
-  //           && server_impl.nextActionIndex == old(server_impl.nextActionIndex)
-  //           && (|| Q_RaftServer_Next_ProcessPacket(old(server_impl.AbstractifyToRaftServer()), server_impl.AbstractifyToRaftServer(), ios)
-  //               || (&& IosReflectIgnoringUnsendable(net_event_log)
-  //                  && old(server_impl.AbstractifyToRaftServer()) == server_impl.AbstractifyToRaftServer()))
-  //           && RawIoConsistentWithSpecIO(net_event_log, ios)
-  //           && OnlySentMarshallableData(net_event_log)
-  //           && old(server_impl.Env().net.history()) + net_event_log == server_impl.Env().net.history()
+  ensures server_impl.repr == old(server_impl.repr)
+  ensures server_impl.net_client != null
+  ensures ok == NetClientOk(server_impl.net_client)
+  ensures server_impl.Env().Valid() && server_impl.Env().ok.ok() ==> ok
+  ensures server_impl.Env() == old(server_impl.Env());
+  ensures ok ==> 
+            && server_impl.Valid()
+            && server_impl.nextActionIndex == old(server_impl.nextActionIndex)
+            // PROVE
+            // && (|| Q_RaftServer_Next_ProcessPacket(old(server_impl.AbstractifyToRaftServer()), server_impl.AbstractifyToRaftServer(), ios)
+            //     || (&& IosReflectIgnoringUnsendable(net_event_log)
+            //        && old(server_impl.AbstractifyToRaftServer()) == server_impl.AbstractifyToRaftServer()))
+            && RawIoConsistentWithSpecIO(net_event_log, ios)
+            && OnlySentMarshallableData(net_event_log)
+            && old(server_impl.Env().net.history()) + net_event_log == server_impl.Env().net.history()
+            && forall i :: 0 <= i < |net_event_log| - 1 ==> net_event_log[i].LIoOpReceive? || net_event_log[i+1].LIoOpSend?
 {
   ghost var old_net_history := server_impl.Env().net.history();
 
@@ -77,6 +79,12 @@ method Server_Next_ProcessPacketX(server_impl:ServerImpl)
       var election_timeout_delta := GenerateElectionTimeout(const_params);
       var next_election_time := UpperBoundedAdditionImpl(clock.t, election_timeout_delta, const_params.max_integer_value);
       server_impl.next_election_time := next_election_time;
+      ghost var receive_io := LIoOpReceive(AbstractifyNetPacketToRaftPacket(receive_event.r));
+      ghost var clock_io := LIoOpReadClock(clock.t as int);
+      net_event_log := [receive_event, clock_event];
+      ios := [receive_io, clock_io];
+      assert net_event_log[0].LIoOpReceive?;
+      assert net_event_log[1].LIoOpReadClock?;
     } else {
       ok := true;
       ghost var receive_io := LIoOpReceive(AbstractifyNetPacketToRaftPacket(receive_event.r));

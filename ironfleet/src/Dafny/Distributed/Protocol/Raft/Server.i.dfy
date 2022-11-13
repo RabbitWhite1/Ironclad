@@ -283,6 +283,7 @@ predicate RaftServerNextProcessPacketWithoutReadingClock(s:RaftServer, s':RaftSe
   && forall io :: io in ios[1..] ==> io.LIoOpSend?
   && var sent_packets := ExtractSentPacketsFromIos(ios);
     match ios[0].r.msg
+      case RaftMessage_Invalid() => false
       case RaftMessage_RequestVote(_,_,_,_) => RaftServerNextHandleRequestVote(s, s', ios[0].r, sent_packets)
       case RaftMessage_RequestVoteReply(_,_) => RaftServerNextHandleRequestVoteReply(s, s', ios[0].r, sent_packets)
       case RaftMessage_AppendEntriesReply(_,_,_) => RaftServerNextHandleAppendEntriesReply(s, s', ios[0].r, sent_packets)

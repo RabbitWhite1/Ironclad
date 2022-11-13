@@ -52,4 +52,9 @@ predicate {:opaque} Q_RaftServerScheduler_Next(s:RaftServerScheduler, s':RaftSer
   RaftServerSchedulerNext(s, s', ios)
 }
 
+predicate AllIosAreSends(ios:seq<RaftIo>)
+{
+  forall i :: 0<=i<|ios| ==> ios[i].LIoOpSend?
+}
+
 }

@@ -1,3 +1,4 @@
+include "../../Impl/Common/SeqIsUniqueDef.i.dfy"
 include "../../Common/Collections/Sets.i.dfy"
 include "../../Common/Collections/Seqs.i.dfy"
 include "../../Common/Collections/Maps2.s.dfy"
@@ -11,6 +12,8 @@ import opened Native__Io_s
 import opened Collections__Sets_i
 import opened Collections__Seqs_i
 import opened Collections__Maps2_s
+
+import opened Common__SeqIsUniqueDef_i
 
 datatype RaftParam = RaftParam(
   min_election_timeout:int,
@@ -41,9 +44,9 @@ function RaftMinQuorumSize(c:RaftConfig) : int
   |c.server_eps|/2+1
 }
 
-predicate ReplicasDistinct(server_eps:seq<EndPoint>, i:int, j:int)
+predicate ServersDistinct<X>(server_eps:seq<X>)
 {
-  0 <= i < |server_eps| && 0 <= j < |server_eps| && server_eps[i] == server_eps[j] ==> i == j
+  forall i, j :: 0 <= i < |server_eps| && 0 <= j < |server_eps| && server_eps[i] == server_eps[j] ==> i == j
 }
 
 function WellFormedRaftConfig(c:RaftConfig) : bool
@@ -53,7 +56,7 @@ function WellFormedRaftConfig(c:RaftConfig) : bool
   && c.params.max_election_timeout > 0
   && c.params.min_election_timeout < c.params.max_election_timeout
   && c.params.heartbeat_timeout > 0
-  && forall i,j :: ReplicasDistinct(c.server_eps, i, j)
+  && SeqIsUnique(c.server_eps)
 }
 
 function WellFormedRaftServerConfig(c:RaftServerConfig) : bool

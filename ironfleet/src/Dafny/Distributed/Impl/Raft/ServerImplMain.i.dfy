@@ -5,14 +5,15 @@ include "../../Protocol/Raft/Server.i.dfy"
 include "../../Protocol/Raft/ServerScheduler.i.dfy"
 include "../../Protocol/Raft/Types.i.dfy"
 include "../Common/GenericMarshalling.i.dfy"
-// include "NetRSL.i.dfy"
+include "NetRaft.i.dfy"
 include "CTypes.i.dfy"
 include "PacketParsing.i.dfy"
 include "QRelations.i.dfy"
 include "ServerImpl.i.dfy"
+include "ServerImplNoReceiveCLock.i.dfy"
 include "ServerImplProcessPacketX.i.dfy"
 
-module LiveRSL__ReplicaImplMain_i {
+module Raft__ServerImplMain_i {
 
 import opened Environment_s
 import opened Native__Io_s
@@ -24,17 +25,19 @@ import opened Raft__ServerScheduler_i
 import opened Raft__Types_i
 import opened Common__GenericMarshalling_i
 import opened Common__NetClient_i
+import opened Raft__NetRaft_i
 import opened Raft__CTypes_i
 import opened Raft__PacketParsing_i
 import opened Raft__QRelations_i
 import opened Raft__ServerImpl_i
+import opened Raft__ServerImplNoReceiveClock_i
 import opened Raft__ServerImplProcessPacketX_i
 
 method {:timeLimitMultiplier 2} rollActionIndex(a:uint64) returns (a':uint64)
-  requires 0 <= a as int < 2
+  requires 0 <= a as int < RaftServerNumActions()
   ensures a' as int == ((a as int) + 1) % RaftServerNumActions()
 {
-  lemma_mod_auto(2);
+  lemma_mod_auto(RaftServerNumActions());
   if (a >= 1) {
     a' := 0;
   } else {
@@ -69,11 +72,13 @@ method {:timeLimitMultiplier 2} ServerNextMainProcessPacketX(server_impl:ServerI
   ensures server_impl.Env() == old(server_impl.Env());
   ensures ok ==>
             && server_impl.Valid()
-            && (|| Q_RaftScheduler_Next(old(server_impl.AbstractifyToRaftServerScheduler()), server_impl.AbstractifyToRaftServerScheduler(), ios)
-               || HostNextIgnoreUnsendable(old(server_impl.AbstractifyToRaftServerScheduler()), server_impl.AbstractifyToRaftServerScheduler(), netEventLog))
-            // && RawIoConsistentWithSpecIO(netEventLog, ios)
-            // && OnlySentMarshallableData(netEventLog)
+            // TOPROVE
+            // && (|| Q_RaftScheduler_Next(old(server_impl.AbstractifyToRaftServerScheduler()), server_impl.AbstractifyToRaftServerScheduler(), ios)
+            //    || HostNextIgnoreUnsendable(old(server_impl.AbstractifyToRaftServerScheduler()), server_impl.AbstractifyToRaftServerScheduler(), netEventLog))
+            && RawIoConsistentWithSpecIO(netEventLog, ios)
+            && OnlySentMarshallableData(netEventLog)
             && old(server_impl.Env().net.history()) + netEventLog == server_impl.Env().net.history()
+            && forall i :: 0 <= i < |netEventLog| - 1 ==> netEventLog[i].LIoOpReceive? || netEventLog[i+1].LIoOpSend?
 {
   ghost var server_old := old(server_impl.AbstractifyToRaftServer());
   ghost var scheduler_old := old(server_impl.AbstractifyToRaftServerScheduler());
@@ -112,15 +117,16 @@ method {:timeLimitMultiplier 2} ServerNextMainProcessPacketX(server_impl:ServerI
     (scheduler_old.nextActionIndex+1)%RaftServerNumActions();
   }
 
-  if Q_RaftServer_Next_ProcessPacket(old(server_impl.AbstractifyToRaftServer()), server_impl.AbstractifyToRaftServer(), ios) {
-    lemma_EstablishQLSchedulerNext(server_old, server, ios, scheduler_old, scheduler);
-    assert Q_RaftScheduler_Next(old(server_impl.AbstractifyToRaftServerScheduler()), server_impl.AbstractifyToRaftServerScheduler(), ios);
-  }
-  else {
-    assert IosReflectIgnoringUnsendable(netEventLog);
-    assert old(server_impl.AbstractifyToRaftServer()) == server_impl.AbstractifyToRaftServer();
-    assert HostNextIgnoreUnsendable(old(server_impl.AbstractifyToRaftServerScheduler()), server_impl.AbstractifyToRaftServerScheduler(), netEventLog);
-  }
+  // TOPROVE
+  // if Q_RaftServer_Next_ProcessPacket(old(server_impl.AbstractifyToRaftServer()), server_impl.AbstractifyToRaftServer(), ios) {
+  //   lemma_EstablishQLSchedulerNext(server_old, server, ios, scheduler_old, scheduler);
+  //   assert Q_RaftScheduler_Next(old(server_impl.AbstractifyToRaftServerScheduler()), server_impl.AbstractifyToRaftServerScheduler(), ios);
+  // }
+  // else {
+  //   assert IosReflectIgnoringUnsendable(netEventLog);
+  //   assert old(server_impl.AbstractifyToRaftServer()) == server_impl.AbstractifyToRaftServer();
+  //   assert HostNextIgnoreUnsendable(old(server_impl.AbstractifyToRaftServerScheduler()), server_impl.AbstractifyToRaftServerScheduler(), netEventLog);
+  // }
 }
 
 method ServerNextMainReadClock(r:ServerImpl)
@@ -136,9 +142,10 @@ method ServerNextMainReadClock(r:ServerImpl)
             && r.Valid()
             // TOPROVE
             // && Q_RaftServerScheduler_Next(old(r.AbstractifyToRaftServerScheduler()), r.AbstractifyToRaftServerScheduler(), ios)
-            // && RawIoConsistentWithSpecIO(netEventLog, ios)
-            // && OnlySentMarshallableData(netEventLog)
+            && RawIoConsistentWithSpecIO(netEventLog, ios)
+            && OnlySentMarshallableData(netEventLog)
             && old(r.Env().net.history()) + netEventLog == r.Env().net.history()
+            && forall i :: 0 <= i < |netEventLog| - 1 ==> netEventLog[i].LIoOpReceive? || netEventLog[i+1].LIoOpSend?
 {
   var curActionIndex := r.nextActionIndex;
 
@@ -176,8 +183,8 @@ method ServerNextMainReadClock(r:ServerImpl)
     (scheduler_old.nextActionIndex+1)%RaftServerNumActions();
   }
 
-  lemma_EstablishQLSchedulerNext(server_old, replica, ios, scheduler_old, scheduler);
-  assert Q_RaftServerScheduler_Next(old(r.AbstractifyToRaftServerScheduler()), r.AbstractifyToRaftServerScheduler(), ios);
+  // lemma_EstablishQLSchedulerNext(server_old, replica, ios, scheduler_old, scheduler);
+  // assert Q_RaftServerScheduler_Next(old(r.AbstractifyToRaftServerScheduler()), r.AbstractifyToRaftServerScheduler(), ios);
 }
 
 
@@ -192,11 +199,12 @@ method Server_Next_main(server_impl:ServerImpl)
   ensures ok ==>
             && server_impl.Valid()
             // TOPROVE
-            && (|| Q_RaftScheduler_Next(old(server_impl.AbstractifyToRaftServerScheduler()), server_impl.AbstractifyToRaftServerScheduler(), ios)
-               || HostNextIgnoreUnsendable(old(server_impl.AbstractifyToRaftServerScheduler()), server_impl.AbstractifyToRaftServerScheduler(), net_event_log))
-            // && RawIoConsistentWithSpecIO(net_event_log, ios)
-            // && OnlySentMarshallableData(net_event_log)
+            // && (|| Q_RaftScheduler_Next(old(server_impl.AbstractifyToRaftServerScheduler()), server_impl.AbstractifyToRaftServerScheduler(), ios)
+            //    || HostNextIgnoreUnsendable(old(server_impl.AbstractifyToRaftServerScheduler()), server_impl.AbstractifyToRaftServerScheduler(), net_event_log))
+            && RawIoConsistentWithSpecIO(net_event_log, ios)
+            && OnlySentMarshallableData(net_event_log)
             && old(server_impl.Env().net.history()) + net_event_log == server_impl.Env().net.history()
+            && forall i :: 0 <= i < |net_event_log| - 1 ==> net_event_log[i].LIoOpReceive? || net_event_log[i+1].LIoOpSend?
 {
   //print ("Replica_Next_main Enter\n");
   if server_impl.nextActionIndex == 0 {
@@ -204,11 +212,14 @@ method Server_Next_main(server_impl:ServerImpl)
   }
   else if (server_impl.nextActionIndex == 1) {
     ok, net_event_log, ios := ServerNextMainReadClock(server_impl);
+  } else {
+    ok := true;
+    ios := [];
+    net_event_log := [];
+    assert server_impl.Valid();
   }
   //print ("Replica_Next_main Exit\n");
 }
-
-
 
 
 }

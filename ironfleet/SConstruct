@@ -379,3 +379,7 @@ atexit.register(display_build_status)
 verify_dafny_file('src/Dafny/Distributed/Services/Simplest/Main.i.dfy')
 env.DafnyCompile('src/Dafny/Distributed/Services/Simplest/Main.i.cs', 'src/Dafny/Distributed/Services/Simplest/Main.i.dfy')
 env.DotnetBuild('bin/IronSimplestServer.dll', 'src/IronSimplestServer/IronSimplestServer.csproj')
+
+verify_dafny_file('src/Dafny/Distributed/Services/Raft/Main.i.dfy')
+env.DafnyCompile('src/Dafny/Distributed/Services/Raft/Main.i.cs', 'src/Dafny/Distributed/Services/Raft/Main.i.dfy')
+env.DotnetBuild('bin/IronRaftServer.dll', 'src/IronRaftServer/IronRaftServer.csproj')
