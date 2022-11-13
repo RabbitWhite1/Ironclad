@@ -49,10 +49,6 @@ module Main_i refines Main_s {
     requires |db| > 0
     requires DS_Init(db[0], config)
     requires forall i: int {:trigger DS_Next(db[i], db[i + 1])} :: 0 <= i < |db| - 1 ==> DS_Next(db[i], db[i + 1])
-    ensures |db| == |sb|
-    ensures Service_Init(sb[0], Collections__Maps2_s.mapdomain(db[0].servers))
-    ensures forall i: int {:trigger Service_Next(sb[i], sb[i + 1])} :: 0 <= i < |sb| - 1 ==> sb[i] == sb[i + 1] || Service_Next(sb[i], sb[i + 1])
-    ensures forall i: int :: 0 <= i < |db| ==> Service_Correspondence(db[i].environment.sentPackets, sb[i])
     decreases config, db
   {
     sb := RefinementToServiceState(config, db);
@@ -417,6 +413,11 @@ module Native__Io_s {
   function MaxPacketSize(): int
   {
     18446744073709551615
+  }
+
+  function MaxEndpointSize(): int
+  {
+    1048576
   }
 
   predicate ValidPhysicalAddress(endPoint: EndPoint)
@@ -2072,10 +2073,6 @@ abstract module Main_s {
     requires |db| > 0
     requires DS_Init(db[0], config)
     requires forall i: int {:trigger DS_Next(db[i], db[i + 1])} :: 0 <= i < |db| - 1 ==> DS_Next(db[i], db[i + 1])
-    ensures |db| == |sb|
-    ensures Service_Init(sb[0], Collections__Maps2_s.mapdomain(db[0].servers))
-    ensures forall i: int {:trigger Service_Next(sb[i], sb[i + 1])} :: 0 <= i < |sb| - 1 ==> sb[i] == sb[i + 1] || Service_Next(sb[i], sb[i + 1])
-    ensures forall i: int :: 0 <= i < |db| ==> Service_Correspondence(db[i].environment.sentPackets, sb[i])
     decreases db
 }
 

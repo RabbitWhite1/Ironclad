@@ -1,6 +1,6 @@
 ﻿using IronfleetCommon;
 using IronfleetIoFramework;
-using IronRSL;
+using IronRaft;
 using MathNet.Numerics.Distributions;
 using System;
 using System.IO;
@@ -8,7 +8,7 @@ using System.Linq;
 using System.Numerics;
 using System.Threading;
 
-namespace IronRSLServer
+namespace IronRaftServer
 {
   public class Params
   {
@@ -137,7 +137,7 @@ namespace IronRSLServer
     static void usage()
     {
       Console.Write(@"
-Usage:  dotnet IronRSL{0}Server.dll <service> <private> [key=value]...
+Usage:  dotnet IronRaft{0}Server.dll <service> <private> [key=value]...
 
   <service> - file path of the service description
   <private> - file path of the private key
@@ -160,7 +160,7 @@ it multiple times, this program deletes its private key file right
 after reading it.  You can override this behavior with
 safeguard=false, but this is a VERY UNSAFE thing to do.
 
-Fortunately, IronRSL can deal with the failure of fewer than half its
+Fortunately, IronRaft can deal with the failure of fewer than half its
 servers.  But, if half of them or more fail, you'll have to create a
 new service.  That is, you'll have to start over by running
 CreateIronServiceCerts, and that new service will be in its initial
@@ -170,7 +170,7 @@ state.
 
     static void Main(string[] args)
     {
-      Console.WriteLine("IronRSL{0}Server program started", Service.Name);
+      Console.WriteLine("IronRaft{0}Server program started", Service.Name);
 
       Console.WriteLine("Processing command-line arguments");
 
@@ -193,8 +193,8 @@ state.
       if (serviceIdentity == null) {
         return;
       }
-      if (serviceIdentity.ServiceType != "IronRSL" + Service.Name) {
-        Console.Error.WriteLine("Provided service identity has type {0}, not IronRSL{1}.",
+      if (serviceIdentity.ServiceType != "IronRaft" + Service.Name) {
+        Console.Error.WriteLine("Provided service identity has type {0}, not IronRaft{1}.",
                                 serviceIdentity.ServiceType, Service.Name);
         return;
       }
@@ -208,12 +208,12 @@ state.
 
       if (ps.Safeguard) {
         File.Delete(ps.PrivateKeyFileName);
-        Console.WriteLine("Deleted private key file after reading it since RSL servers should never run twice.");
+        Console.WriteLine("Deleted private key file after reading it since Raft servers should never run twice.");
       }
       else {
         Console.WriteLine(@"
   *** DANGER:  Because you specified safeguard=false, we didn't delete the ***
-  *** private key file to prevent you from running the RSL server twice.   ***
+  *** private key file to prevent you from running the Raft server twice.   ***
   *** Hopefully, you're just testing things.                               ***
 ");
       }

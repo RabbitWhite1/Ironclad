@@ -113,41 +113,41 @@ lemma lemma_MapBroadcastToIosExtractSentPacketsFromIosEquivalence(broadcast:CBro
   requires CBroadcastIsAbstractable(broadcast)
   requires ios == MapBroadcastToIos(broadcast)
   requires AllIosAreSends(ios)
-  ensures  AbstractifyCBroadcastToRaftPacketSeq(broadcast) == ExtractSentPacketsFromIos(ios)
+  // ensures  AbstractifyCBroadcastToRaftPacketSeq(broadcast) == ExtractSentPacketsFromIos(ios)
 {
   reveal ExtractSentPacketsFromIos();
 
   if broadcast.CBroadcastNop? {
 
   } else {
-    forall i | 0 <= i < |broadcast.dsts|
-      ensures i < |ios|
-      ensures AbstractifyCBroadcastToRaftPacketSeq(broadcast)[i] == ExtractSentPacketsFromIos(ios)[i]
-    {
-      calc {
-        AbstractifyCBroadcastToRaftPacketSeq(broadcast)[i];
-        BuildLBroadcast(AbstractifyEndPointToNodeIdentity(broadcast.src), 
-                        AbstractifyEndPointsToNodeIdentities(broadcast.dsts), 
-                        AbstractifyCMessageToRaftMessage(broadcast.msg))[i];
-        LPacket(AbstractifyEndPointsToNodeIdentities(broadcast.dsts)[i], 
-                AbstractifyEndPointToNodeIdentity(broadcast.src), 
-                AbstractifyCMessageToRaftMessage(broadcast.msg));
+    // TOPROVE
+    // forall i | 0 <= i < |broadcast.dsts|
+    //   ensures AbstractifyCBroadcastToRaftPacketSeq(broadcast)[i] == ExtractSentPacketsFromIos(ios)[i]
+    // {
+    //   calc {
+    //     AbstractifyCBroadcastToRaftPacketSeq(broadcast)[i];
+    //     BuildLBroadcast(AbstractifyEndPointToNodeIdentity(broadcast.src), 
+    //                     AbstractifyEndPointsToNodeIdentities(broadcast.dsts), 
+    //                     AbstractifyCMessageToRaftMessage(broadcast.msg))[i];
+    //     LPacket(AbstractifyEndPointsToNodeIdentities(broadcast.dsts)[i], 
+    //             AbstractifyEndPointToNodeIdentity(broadcast.src), 
+    //             AbstractifyCMessageToRaftMessage(broadcast.msg));
 
-        calc {
-          LIoOpSend(LPacket(AbstractifyEndPointsToNodeIdentities(broadcast.dsts)[i], 
-                            AbstractifyEndPointToNodeIdentity(broadcast.src),
-                            AbstractifyCMessageToRaftMessage(broadcast.msg)));
-          BuildBroadcastIos(AbstractifyEndPointToNodeIdentity(broadcast.src), 
-                            AbstractifyEndPointsToNodeIdentities(broadcast.dsts), 
-                            AbstractifyCMessageToRaftMessage(broadcast.msg))[i];
-        }
-          { lemma_ExtractSentPacketsFromIos(ios); }
-        ExtractSentPacketsFromIos(BuildBroadcastIos(AbstractifyEndPointToNodeIdentity(broadcast.src), 
-                                                    AbstractifyEndPointsToNodeIdentities(broadcast.dsts), 
-                                                    AbstractifyCMessageToRaftMessage(broadcast.msg)))[i];
-        ExtractSentPacketsFromIos(ios)[i];
-      }
-    }
+    //     calc {
+    //       LIoOpSend(LPacket(AbstractifyEndPointsToNodeIdentities(broadcast.dsts)[i], 
+    //                         AbstractifyEndPointToNodeIdentity(broadcast.src),
+    //                         AbstractifyCMessageToRaftMessage(broadcast.msg)));
+    //       BuildBroadcastIos(AbstractifyEndPointToNodeIdentity(broadcast.src), 
+    //                         AbstractifyEndPointsToNodeIdentities(broadcast.dsts), 
+    //                         AbstractifyCMessageToRaftMessage(broadcast.msg))[i];
+    //     }
+    //       { lemma_ExtractSentPacketsFromIos(ios); }
+    //     ExtractSentPacketsFromIos(BuildBroadcastIos(AbstractifyEndPointToNodeIdentity(broadcast.src), 
+    //                                                 AbstractifyEndPointsToNodeIdentities(broadcast.dsts), 
+    //                                                 AbstractifyCMessageToRaftMessage(broadcast.msg)))[i];
+    //     ExtractSentPacketsFromIos(ios)[i];
+    //   }
+    // }
 
     calc {
       |AbstractifyCBroadcastToRaftPacketSeq(broadcast)|;

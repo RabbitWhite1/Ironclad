@@ -450,7 +450,7 @@ predicate CBroadcastIsValid(broadcast:CBroadcast)
   && CBroadcastIsAbstractable(broadcast)
   && (broadcast.CBroadcast? ==>
       && Marshallable(broadcast.msg)
-      && 0 <= |broadcast.dsts| < 0xFFFF_FFFF_FFFF_FFFF)
+      && 0 <= |broadcast.dsts| <= 0xFFFF_FFFF_FFFF_FFFF)
 }
 
 predicate BufferRefinementAgreesWithMessageRefinement(msg:CMessage, marshalled:seq<byte>)
