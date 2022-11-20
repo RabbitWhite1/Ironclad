@@ -1,4 +1,5 @@
 include "../../Common/Collections/Seqs.i.dfy"
+include "../../Common/Logic/Option.i.dfy"
 include "../../../Libraries/Math/mod_auto.i.dfy"
 include "../../Protocol/Raft/Server.i.dfy"
 include "../../Protocol/Raft/Types.i.dfy"
@@ -10,6 +11,7 @@ include "NetRaft.i.dfy"
 include "PacketParsing.i.dfy"
 include "QRelations.i.dfy"
 include "ServerImpl.i.dfy"
+include "ServerImplDelivery.i.dfy"
 // include "NetRSL.i.dfy"
 
 module Raft__ServerImplProcessPacketX_i {
@@ -17,6 +19,7 @@ module Raft__ServerImplProcessPacketX_i {
 import opened Native__Io_s
 import opened Native__NativeTypes_s
 import opened Collections__Seqs_i
+import opened Logic__Option_i
 import opened Math__mod_auto_i
 import opened Common__NetClient_i
 import opened Common__UpperBound_i
@@ -29,6 +32,7 @@ import opened Raft__PacketParsing_i
 import opened Raft__QRelations_i
 import opened Raft__ServerImpl_i
 import opened Raft__Types_i
+import opened Raft__ServerImplDelivery_i
 
 method Server_Next_ProcessPacketX(server_impl:ServerImpl)
   returns (ok:bool, ghost net_event_log:seq<NetEvent>, ghost ios:seq<RaftIo>)
@@ -88,8 +92,62 @@ method Server_Next_ProcessPacketX(server_impl:ServerImpl)
     } else {
       ok := true;
       ghost var receive_io := LIoOpReceive(AbstractifyNetPacketToRaftPacket(receive_event.r));
-      net_event_log := [receive_event];
-      ios := [receive_io];
+      var my_idx := server_impl.GetMyIndex();
+      print my_idx, " received a request1", rr.cpacket.msg, ", marshallable=", marshallable, "\n";
+      if (rr.cpacket.msg.CMessage_Invalid?) {
+        ok := true;
+        net_event_log := [receive_event];
+        ios := [receive_io];
+      } else if (rr.cpacket.msg.CMessage_Request?) {
+        ok := true;
+        var recved_msg := rr.cpacket.msg;
+        ghost var ios_head := [receive_io];
+        ghost var log_head := [receive_event];
+        ghost var log_tail, ios_tail;
+        if server_impl.role == Leader {
+          var leader_id;
+          if (server_impl.current_leader.Some?) {
+            leader_id := GetEndPointIndex(server_impl.config.global_config, server_impl.current_leader.v);
+          } else {
+            leader_id := GetEndPointIndex(server_impl.config.global_config, server_impl.config.server_ep);
+          }
+          var msg := CMessage_Reply(recved_msg.seqno_req, 1, leader_id, []);
+          var packet := CPacket(rr.cpacket.src, server_impl.config.server_ep , msg);
+          var outbound_packets := OutboundPacket(Some(packet));
+          ok, log_tail, ios_tail := DeliverOutboundPackets(server_impl, outbound_packets);
+          if (!ok) { return; }
+          ios := ios_head + ios_tail;
+          net_event_log := log_head + log_tail;
+          assert net_event_log[0].LIoOpReceive?;
+          assert forall i::0<=i<|log_tail| ==> AbstractifyNetEventToRaftIo(log_tail[i]) == ios_tail[i];
+          assert forall i::0<=i<|log_tail| ==> log_tail[i].LIoOpSend? && ios_tail[i].LIoOpSend?;
+          assert forall i :: 1 <= i < |net_event_log| ==> net_event_log[i].LIoOpSend?;
+          assert forall i :: 0 <= i < |net_event_log| - 1 ==> net_event_log[i].LIoOpReceive? || net_event_log[i+1].LIoOpSend?;
+        } else {
+          var leader_id;
+          if (server_impl.current_leader.Some?) {
+            leader_id := GetEndPointIndex(server_impl.config.global_config, server_impl.current_leader.v);
+          } else {
+            leader_id := GetEndPointIndex(server_impl.config.global_config, server_impl.config.server_ep);
+          }
+          var msg := CMessage_Reply(recved_msg.seqno_req, 1, leader_id, []);
+          var packet := CPacket(rr.cpacket.src, server_impl.config.server_ep , msg);
+          var outbound_packets := OutboundPacket(Some(packet));
+          ok, log_tail, ios_tail := DeliverOutboundPackets(server_impl, outbound_packets);
+          if (!ok) { return; }
+          ios := ios_head + ios_tail;
+          net_event_log := log_head + log_tail;
+          assert net_event_log[0].LIoOpReceive?;
+          assert forall i::0<=i<|log_tail| ==> AbstractifyNetEventToRaftIo(log_tail[i]) == ios_tail[i];
+          assert forall i::0<=i<|log_tail| ==> log_tail[i].LIoOpSend? && ios_tail[i].LIoOpSend?;
+          assert forall i :: 1 <= i < |net_event_log| ==> net_event_log[i].LIoOpSend?;
+          assert forall i :: 0 <= i < |net_event_log| - 1 ==> net_event_log[i].LIoOpReceive? || net_event_log[i+1].LIoOpSend?;
+        }
+      } else {
+        ok := true;
+        net_event_log := [receive_event];
+        ios := [receive_io];
+      }
     }
   }
 }

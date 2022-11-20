@@ -206,7 +206,7 @@ Then, run each of the following three server commands, each in a different windo
 
 Finally, run this client command in yet another window:
 ```
-  dotnet bin/IronRSLKVClient.dll certs/MyKV.IronRSLKV.service.txt nthreads=10 duration=30 setfraction=0.25 deletefraction=0.05 print=true
+dotnet bin/IronRSLKVClient.dll certs/MyKV.IronRSLKV.service.txt nthreads=10 duration=30 setfraction=0.25 deletefraction=0.05 print=true
 ```
 
 If you don't want the client to print the requests it sends and the replies it

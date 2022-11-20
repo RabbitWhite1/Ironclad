@@ -23,14 +23,29 @@
       - [x] Concrete server definitions
       - [x] cmdline parser
     - [ ] host_next
-      - [ ] message parsing and marshaling
+      - [x] message parsing and marshaling
+        - [x] grammar
+        - [x] demarshal (bytearray -> datatype)
+        - [x] define marshallable (all kinds of sizes should be limited) and valid (semantically valid)
+        - [x] marshal (datatype -> bytearray)
+      - [x] NetRaft.i.dfy: 
+        - [x] marshal and send Raft Package
+        - [x] receive and demarshall to Raft Package
       - [ ] server
+        - [x] ServerImpl
         - [ ] handle messages
           - [ ] RequestVote
           - [ ] RequestVoteReply
           - [ ] appendEntries
+            - [x] reset next_election_timeout
+            - [ ] reply
           - [ ] appendEntriesReply
           - [ ] client request
           - [ ] client response
+        - [x] timeout checking
+          - [x] if leader: send heartbeat
+          - [ ] if follower: start election
+  - [x] Program.cs: the driver for Raft Server
+  - [ ] Client
 
 - additional lemmas for proof

@@ -82,6 +82,27 @@ predicate ConfigStateIsValid(config:ConfigState)
   && RaftMinQuorumSize(AbstractifyConfigStateToRaftConfig(config)) <= |config.server_eps|
 }
 
+method GetEndPointIndex(global_config:ConfigState, ep:EndPoint) returns(index:uint64)
+  requires ep in global_config.server_eps
+  requires ConfigStateIsValid(global_config)
+  ensures 0 <= index as int < |global_config.server_eps|
+  ensures global_config.server_eps[index] == ep
+{
+  index := |global_config.server_eps| as uint64;
+  var i := 0;
+  while i < |global_config.server_eps|
+    invariant 0 <= i as int <= |global_config.server_eps|
+    decreases |global_config.server_eps| - i 
+    invariant exists idx :: i <= idx as int < |global_config.server_eps| && global_config.server_eps[idx] == ep;
+  {
+    if global_config.server_eps[i] == ep {
+      index := i as uint64;
+      break;
+    }
+    i := i + 1;
+  }
+}
+
 function AbstractifyConfigStateToRaftConfig(config:ConfigState) : RaftConfig
 {
   RaftConfig(

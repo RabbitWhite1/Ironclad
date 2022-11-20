@@ -5,3 +5,4 @@
 # of this directory, with the end result being that some should-be-ignored files
 # show up as "Untracked Files" in the "Team Explorer - Changes" panel.
 #
+.DS_Store

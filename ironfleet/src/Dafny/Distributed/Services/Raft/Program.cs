@@ -213,7 +213,7 @@ state.
       else {
         Console.WriteLine(@"
   *** DANGER:  Because you specified safeguard=false, we didn't delete the ***
-  *** private key file to prevent you from running the Raft server twice.   ***
+  *** private key file to prevent you from running the Raft server twice.  ***
   *** Hopefully, you're just testing things.                               ***
 ");
       }

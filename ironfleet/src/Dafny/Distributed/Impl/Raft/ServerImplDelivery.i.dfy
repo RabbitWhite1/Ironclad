@@ -51,6 +51,8 @@ method DeliverPacket(r:ServerImpl, packets:OutboundPackets) returns (ok:bool, gh
           && OnlySentMarshallableData(netEventLog)
           && RawIoConsistentWithSpecIO(netEventLog, ios)
           && old(r.Env().net.history()) + netEventLog == r.Env().net.history()
+          && forall i::0<=i<|netEventLog| ==> AbstractifyNetEventToRaftIo(netEventLog[i]) == ios[i]
+          && forall i::0<=i<|netEventLog| ==> netEventLog[i].LIoOpSend? && ios[i].LIoOpSend?;
 {
   var start_time := Time.GetDebugTimeTicks();
   ok, netEventLog := SendPacket(r.net_client, packets, r.local_addr);

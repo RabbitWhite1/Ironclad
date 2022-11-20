@@ -263,7 +263,7 @@ predicate RaftServerNextHandleRequestVoteReply(s:RaftServer, s':RaftServer, rece
   && RaftServerMaybeStepDown(s, s', received_packet.msg.term)
 }
 
-predicate LReplicaNextReadClockAndProcessPacket(s:RaftServer, s':RaftServer, ios:seq<RaftIo>)
+predicate RaftServerNextReadClockAndProcessPacket(s:RaftServer, s':RaftServer, ios:seq<RaftIo>)
   requires |ios| >= 1
   requires ios[0].LIoOpReceive?
   requires ios[0].r.msg.RaftMessage_AppendEntries?
@@ -273,6 +273,25 @@ predicate LReplicaNextReadClockAndProcessPacket(s:RaftServer, s':RaftServer, ios
   && (forall io :: io in ios[2..] ==> io.LIoOpSend?)
   && forall entry :: entry in ios[0].r.msg.entries ==> LogEntryValid(entry)
   && RaftServerNextHandleAppendEntries(s, s', ios[0].r, ios[1].t, ExtractSentPacketsFromIos(ios))
+}
+
+predicate RaftServerNextHandleRequest(s:RaftServer, s':RaftServer, received_packet:RaftPacket, sent_packets:seq<RaftPacket>)
+  requires received_packet.msg.RaftMessage_Request?
+{
+  if |received_packet.msg.req| > MaxAppRequestSize() then
+    && sent_packets == []
+    && s' == s
+  else
+    // TODO
+    && sent_packets == []
+    && s' == s
+}
+
+predicate RaftServerNextHandleReply(s:RaftServer, s':RaftServer, received_packet:RaftPacket, sent_packets:seq<RaftPacket>)
+  requires received_packet.msg.RaftMessage_Reply?
+{
+  && sent_packets == []
+  && s' == s
 }
 
 predicate RaftServerNextProcessPacketWithoutReadingClock(s:RaftServer, s':RaftServer, ios:seq<RaftIo>)
@@ -287,6 +306,8 @@ predicate RaftServerNextProcessPacketWithoutReadingClock(s:RaftServer, s':RaftSe
       case RaftMessage_RequestVote(_,_,_,_) => RaftServerNextHandleRequestVote(s, s', ios[0].r, sent_packets)
       case RaftMessage_RequestVoteReply(_,_) => RaftServerNextHandleRequestVoteReply(s, s', ios[0].r, sent_packets)
       case RaftMessage_AppendEntriesReply(_,_,_) => RaftServerNextHandleAppendEntriesReply(s, s', ios[0].r, sent_packets)
+      case RaftMessage_Request(_,_) => RaftServerNextHandleRequest(s, s', ios[0].r, sent_packets)
+      case RaftMessage_Reply(_,_,_,_) => RaftServerNextHandleReply(s, s', ios[0].r, sent_packets)
 }
 
 predicate RaftServerNextProcessPacket(s:RaftServer, s':RaftServer, ios:seq<RaftIo>)
@@ -298,7 +319,7 @@ predicate RaftServerNextProcessPacket(s:RaftServer, s':RaftServer, ios:seq<RaftI
       (
         && ios[0].LIoOpReceive?
         && if ios[0].r.msg.RaftMessage_AppendEntries? then
-            LReplicaNextReadClockAndProcessPacket(s, s', ios)
+            RaftServerNextReadClockAndProcessPacket(s, s', ios)
           else
             RaftServerNextProcessPacketWithoutReadingClock(s, s', ios)
       )

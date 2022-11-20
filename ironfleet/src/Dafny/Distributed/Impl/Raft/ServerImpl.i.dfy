@@ -1,3 +1,4 @@
+include "../../Common/Collections/Seqs.i.dfy"
 include "../../Common/Framework/Environment.s.dfy"
 include "../../Common/Logic/Option.i.dfy"
 include "../../Common/Native/NativeTypes.s.dfy"
@@ -14,6 +15,7 @@ include "PacketParsing.i.dfy"
 
 module Raft__ServerImpl_i {
 
+import opened Collections__Seqs_i
 import opened Logic__Option_i
 import opened Native__Io_s
 import opened Native__NativeTypes_s
@@ -88,6 +90,7 @@ class ServerImpl
     && EndPoint(net_client.MyPublicKey()) == config.server_ep
     && repr == { this } + NetClientRepr(net_client)
     && msg_grammar == CMessage_grammar()
+    && (current_leader.None? || (current_leader.Some? && current_leader.v in config.global_config.server_eps))
   }
 
   function AbstractifyToRaftServer() : RaftServer
@@ -154,6 +157,14 @@ class ServerImpl
     reads this, NetClientIsValid.reads(net_client)
   {
     net_client.env
+  }
+
+  method GetMyIndex() returns(index:uint64)
+    requires Valid()
+    ensures 0 <= index as int < |config.global_config.server_eps|
+    ensures config.global_config.server_eps[index] == config.server_ep
+  {
+    index := GetEndPointIndex(config.global_config, config.server_ep);
   }
 }
 }

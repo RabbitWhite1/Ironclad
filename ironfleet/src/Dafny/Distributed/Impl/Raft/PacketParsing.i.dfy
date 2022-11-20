@@ -44,13 +44,17 @@ function method CMessage_RequestVote_grammar() : G { GTuple([GUint64, EndPoint_g
 function method CMessage_RequestVoteReply_grammar() : G { GTuple([GUint64, GUint64]) }
 function method CMessage_AppendEntries_grammar() : G { GTuple([GUint64, EndPoint_grammar(), GUint64, GUint64, CLogEntrySeq_grammar(), GUint64]) }
 function method CMessage_AppendEntriesReply_grammar() : G { GTuple([GUint64, GUint64, GUint64]) }
+function method CMessage_Request_grammar() : G { GTuple([GUint64, GByteArray]) }
+function method CMessage_Reply_grammar() : G { GTuple([GUint64, GUint64, GUint64, GByteArray]) }
 
 function method CMessage_grammar() : G { 
   GTaggedUnion([
     CMessage_RequestVote_grammar(),
     CMessage_RequestVoteReply_grammar(),
     CMessage_AppendEntries_grammar(),
-    CMessage_AppendEntriesReply_grammar()
+    CMessage_AppendEntriesReply_grammar(),
+    CMessage_Request_grammar(),
+    CMessage_Reply_grammar()
   ]) 
 }
 
@@ -158,6 +162,31 @@ function method parse_Message_AppendEntriesReply(val:V) : CMessage
   )
 }
 
+function method parse_Message_Request(val:V) : CMessage
+  requires ValInGrammar(val, CMessage_Request_grammar())
+  ensures CMessageIsAbstractable(parse_Message_Request(val))
+  ensures  ValidVal(val) ==> CMessageIs64Bit(parse_Message_Request(val))
+{
+  assert ValInGrammar(val, CMessage_Request_grammar());
+  CMessage_Request(
+    val.t[0].u,
+    val.t[1].b
+  )
+}
+function method parse_Message_Reply(val:V) : CMessage
+  requires ValInGrammar(val, CMessage_Reply_grammar())
+  ensures CMessageIsAbstractable(parse_Message_Reply(val))
+  ensures  ValidVal(val) ==> CMessageIs64Bit(parse_Message_Reply(val))
+{
+  assert ValInGrammar(val, CMessage_Reply_grammar());
+  CMessage_Reply(
+    val.t[0].u,
+    val.t[1].u,
+    val.t[2].u,
+    val.t[3].b
+  )
+}
+
 function parse_Message(val:V) : CMessage
   requires ValInGrammar(val, CMessage_grammar())
   ensures  CMessageIsAbstractable(parse_Message(val))
@@ -171,6 +200,10 @@ function parse_Message(val:V) : CMessage
     parse_Message_AppendEntries(val.val)
   else if val.c == 3 then
     parse_Message_AppendEntriesReply(val.val)
+  else if val.c == 4 then
+    parse_Message_Request(val.val)
+  else if val.c == 5 then
+    parse_Message_Reply(val.val)
   else
     assert false;
     parse_Message_RequestVote(val.val)
@@ -192,6 +225,10 @@ method Parse_Message(val:V) returns (msg:CMessage)
     msg := parse_Message_AppendEntries(val.val);
   } else if val.c == 3 {
     msg := parse_Message_AppendEntriesReply(val.val);
+  } else if val.c == 4 {
+    msg := parse_Message_Request(val.val);
+  } else if val.c == 5 {
+    msg := parse_Message_Reply(val.val);
   } else {
     assert false;
   }
@@ -242,7 +279,8 @@ function Marshallable(c:CMessage) : bool
   && (c.CMessage_RequestVote? ==> EndPointIsValidPublicKey(c.candidate_ep))
   && (c.CMessage_RequestVoteReply? ==> true)
   && (c.CMessage_AppendEntries? ==> ValidAppendEntries(c) && EndPointIsValidPublicKey(c.leader_ep))
-  && (c.CMessage_AppendEntriesReply? ==> true)
+  && (c.CMessage_Request? ==> CAppRequestMarshallable(c.req))
+  && (c.CMessage_Reply? ==> CAppReplyMarshallable(c.reply))
 }
 
 function CMessageIsValid(msg:CMessage) : bool
@@ -274,6 +312,12 @@ method DetermineIfMessageMarshallable(msg:CMessage) returns (b:bool)
   }
   else if msg.CMessage_AppendEntriesReply? {
     b := true;
+  }
+  else if msg.CMessage_Request? {
+    b := CAppRequestMarshallable(msg.req);
+  }
+  else if msg.CMessage_Reply? {
+    b := CAppReplyMarshallable(msg.reply);
   }
   else {
     assert false;
@@ -383,6 +427,28 @@ method MarshallMessage_AppendEntriesReply(c:CMessage) returns (val:V)
   assert ValInGrammar(val, CMessage_AppendEntriesReply_grammar());
 }
 
+method MarshallMessage_Request(c:CMessage) returns (val:V)
+  requires c.CMessage_Request?
+  requires Marshallable(c)
+  ensures  ValInGrammar(val, CMessage_Request_grammar())
+  ensures  ValidVal(val)
+  ensures  parse_Message_Request(val) == c
+{
+  val := VTuple([VUint64(c.seqno_req), VByteArray(c.req)]);
+  assert ValInGrammar(val, CMessage_Request_grammar());
+}
+
+method MarshallMessage_Reply(c:CMessage) returns (val:V)
+  requires c.CMessage_Reply?
+  requires Marshallable(c)
+  ensures  ValInGrammar(val, CMessage_Reply_grammar())
+  ensures  ValidVal(val)
+  ensures  parse_Message_Reply(val) == c
+{
+  val := VTuple([VUint64(c.seqno_reply), VUint64(c.ok), VUint64(c.leader_id), VByteArray(c.reply)]);
+  assert ValInGrammar(val, CMessage_Reply_grammar());
+}
+
 method MarshallMessage(c:CMessage) returns (val:V)
   requires Marshallable(c)
   ensures  ValInGrammar(val, CMessage_grammar())
@@ -403,6 +469,12 @@ method MarshallMessage(c:CMessage) returns (val:V)
   } else if c.CMessage_AppendEntriesReply? {
     var msg := MarshallMessage_AppendEntriesReply(c);
     val := VCase(3, msg);
+  } else if c.CMessage_Request? {
+    var msg := MarshallMessage_Request(c);
+    val := VCase(4, msg);
+  } else if c.CMessage_Reply? {
+    var msg := MarshallMessage_Reply(c);
+    val := VCase(5, msg);
   } else {
     assert false;
   }
@@ -586,6 +658,12 @@ lemma lemma_MarshallableBound(c:CMessage, val:V)
     assert |val.val.t| == 3;
     lemma_VSizeSeqSum3(val.val);
     assert SizeOfV(val) == 32;
+  } else if c.CMessage_Request? {
+    assert ValInGrammar(val.val, CMessage_Request_grammar());
+    lemma_VSizeSeqSum2(val.val);
+  } else if c.CMessage_Reply? {
+    assert ValInGrammar(val.val, CMessage_Reply_grammar());
+    lemma_VSizeSeqSum4(val.val);
   } else {
     assert false;
   }

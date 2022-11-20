@@ -32,6 +32,8 @@ datatype CMessage =
   | CMessage_RequestVoteReply(term:uint64, vote_granted:uint64)
   | CMessage_AppendEntries(term:uint64, leader_ep:EndPoint, prev_log_index:uint64, prev_log_term:uint64, entries:seq<CLogEntry>, leader_commit:uint64)
   | CMessage_AppendEntriesReply(term:uint64, success:uint64, match_index:uint64)
+  | CMessage_Request(seqno_req:uint64, req:CAppRequest)
+  | CMessage_Reply(seqno_reply:uint64, ok:uint64, leader_id:uint64, reply:CAppReply)
 
 datatype CPacket = CPacket(dst:EndPoint, src:EndPoint, msg:CMessage)
 
@@ -59,6 +61,8 @@ predicate CMessageIsAbstractable(msg:CMessage) {
     case CMessage_RequestVoteReply(_, _) => true
     case CMessage_AppendEntries(_, _, _, _, _, _) => true
     case CMessage_AppendEntriesReply(_, _, _) => true
+    case CMessage_Request(_, _) => true
+    case CMessage_Reply(_, _, _, _) => true
   }
 }
 
@@ -71,6 +75,8 @@ function AbstractifyCMessageToRaftMessage(msg:CMessage) : RaftMessage
     case CMessage_RequestVoteReply(term, vote_granted) => RaftMessage_RequestVoteReply(term as int, vote_granted == 1)
     case CMessage_AppendEntries(term, leader_ep, prev_log_index, prev_log_term, entries, leader_commit) => RaftMessage_AppendEntries(term as int, leader_ep, prev_log_index as int, prev_log_term as int, AbstractifyCLogEntrySeqToRaftLogEntrySeq(entries), leader_commit as int)
     case CMessage_AppendEntriesReply(term, success, match_index) => RaftMessage_AppendEntriesReply(term as int, success == 1, match_index as int)
+    case CMessage_Request(seqno_req, req) => RaftMessage_Request(seqno_req as int, AbstractifyCAppRequestToAppRequest(req))
+    case CMessage_Reply(seqno_reply, ok, leader_id, reply) => RaftMessage_Reply(seqno_reply as int, AbstractifyCAppReplyToAppReply(reply), ok == 1, leader_id as int)
 }
 
 // CPacket

@@ -775,6 +775,7 @@ namespace IronfleetIoFramework
       if (scheduler.Verbose) {
         Console.WriteLine("Starting to listen on {0}", myEndpoint);
       }
+      Console.WriteLine("Starting to listen on {0}", myEndpoint);
 
       listener = new TcpListener(myEndpoint);
       listener.ExclusiveAddressUse = true;
