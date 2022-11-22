@@ -11,6 +11,7 @@ include "CMessage.i.dfy"
 include "PacketParsing.i.dfy"
 include "QRelations.i.dfy"
 include "ServerImpl.i.dfy"
+include "ServerImplCommitAndApply.i.dfy"
 include "ServerImplNoReceiveCLock.i.dfy"
 include "ServerImplProcessPacketX.i.dfy"
 
@@ -32,6 +33,7 @@ import opened Raft__CMessage_i
 import opened Raft__PacketParsing_i
 import opened Raft__QRelations_i
 import opened Raft__ServerImpl_i
+import opened Raft__ServerImplCommitAndApply_i
 import opened Raft__ServerImplNoReceiveClock_i
 import opened Raft__ServerImplProcessPacketX_i
 
@@ -40,7 +42,7 @@ method {:timeLimitMultiplier 2} rollActionIndex(a:uint64) returns (a':uint64)
   ensures a' as int == ((a as int) + 1) % RaftServerNumActions()
 {
   lemma_mod_auto(RaftServerNumActions());
-  if (a >= 1) {
+  if (a >= RaftServerNumActions() as uint64 - 1) {
     a' := 0;
   } else {
     a' := (a + 1);
@@ -159,8 +161,6 @@ method ServerNextMainReadClock(server_impl:ServerImpl)
   ok, netEventLog, ios := Server_Next_NoReceive_ReadClock(server_impl);
   if (!ok) { return; }
 
-  assert server_impl.Valid();
-
   // Mention unchanged predicates over mutable state in the old heap.
   ghost var net_client_old := server_impl.net_client;
   ghost var net_addr_old := server_impl.net_client.MyPublicKey();
@@ -190,6 +190,67 @@ method ServerNextMainReadClock(server_impl:ServerImpl)
   // assert Q_RaftServerScheduler_Next(old(r.AbstractifyToRaftServerScheduler()), r.AbstractifyToRaftServerScheduler(), ios);
 }
 
+method ServerNextMainCommitAndApply(server_impl:ServerImpl)
+  returns (ok:bool, ghost netEventLog:seq<NetEvent>, ghost ios:seq<RaftIo>)
+  requires server_impl.Valid()
+  requires server_impl.nextActionIndex == 2
+  modifies server_impl.repr
+  ensures server_impl.repr == old(server_impl.repr)
+  ensures server_impl.net_client != null
+  ensures server_impl.Env().Valid() && server_impl.Env().ok.ok() ==> ok
+  ensures server_impl.Env() == old(server_impl.Env());
+  ensures ok ==>
+            && server_impl.Valid()
+            // TOPROVE
+            // && Q_RaftServerScheduler_Next(old(r.AbstractifyToRaftServerScheduler()), r.AbstractifyToRaftServerScheduler(), ios)
+            && RawIoConsistentWithSpecIO(netEventLog, ios)
+            && OnlySentMarshallableData(netEventLog)
+            && old(server_impl.Env().net.history()) + netEventLog == server_impl.Env().net.history()
+            && forall i :: 0 <= i < |netEventLog| - 1 ==> netEventLog[i].LIoOpReceive? || netEventLog[i+1].LIoOpSend?
+{
+  var curActionIndex := server_impl.nextActionIndex;
+
+  ghost var server_old := old(server_impl.AbstractifyToRaftServer());
+  ghost var scheduler_old := old(server_impl.AbstractifyToRaftServerScheduler());
+
+  assert scheduler_old.server == server_old;
+
+  ok, netEventLog, ios := Server_Next_CommitAndApply(server_impl);
+  if (!ok) { return; }
+
+  // Mention unchanged predicates over mutable state in the old heap.
+  ghost var net_client_old := server_impl.net_client;
+  ghost var net_addr_old := server_impl.net_client.MyPublicKey();
+  assert NetClientIsValid(net_client_old);
+
+  ghost var replica := server_impl.AbstractifyToRaftServer();
+
+  // Update nextActionIndex
+  var nextActionIndex' := rollActionIndex(server_impl.nextActionIndex);
+  server_impl.nextActionIndex := nextActionIndex';
+  
+  ghost var scheduler := server_impl.AbstractifyToRaftServerScheduler();
+
+  // Mention unchanged predicates over mutable state in the new heap.
+  assert net_client_old == server_impl.net_client;
+  assert NetClientIsValid(server_impl.net_client);
+  assert net_addr_old == server_impl.net_client.MyPublicKey();
+
+  assert server_impl.Valid();
+        
+  calc {
+    scheduler.nextActionIndex;
+    server_impl.nextActionIndex as int;
+    nextActionIndex' as int;
+    ((curActionIndex+1) as int)%RaftServerNumActions();
+    (scheduler_old.nextActionIndex+1)%RaftServerNumActions();
+  }
+
+  // lemma_EstablishQLSchedulerNext(server_old, replica, ios, scheduler_old, scheduler);
+  // assert Q_RaftServerScheduler_Next(old(r.AbstractifyToRaftServerScheduler()), r.AbstractifyToRaftServerScheduler(), ios);
+
+}
+
 
 method Server_Next_main(server_impl:ServerImpl)
   returns (ok:bool, ghost net_event_log:seq<NetEvent>, ghost ios:seq<RaftIo>)
@@ -212,9 +273,10 @@ method Server_Next_main(server_impl:ServerImpl)
   //print ("Replica_Next_main Enter\n");
   if server_impl.nextActionIndex == 0 {
     ok, net_event_log, ios := ServerNextMainProcessPacketX(server_impl);
-  }
-  else if (server_impl.nextActionIndex == 1) {
+  } else if (server_impl.nextActionIndex == 1) {
     ok, net_event_log, ios := ServerNextMainReadClock(server_impl);
+  } else if (server_impl.nextActionIndex == 2) {
+    ok, net_event_log, ios := ServerNextMainCommitAndApply(server_impl);
   } else {
     ok := true;
     ios := [];

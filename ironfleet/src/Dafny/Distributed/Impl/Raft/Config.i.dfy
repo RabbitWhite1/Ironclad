@@ -67,6 +67,12 @@ datatype ConfigState = ConfigState(
   params:ParamState
 )
 
+function method CRaftMinQuorumSize(c:ConfigState) : uint64
+  requires ConfigStateIsValid(c)
+{
+  (|c.server_eps| as uint64)/2+1
+}
+
 predicate ConfigStateIsAbstractable(config:ConfigState)
 {
   && (forall e :: e in config.server_eps ==> EndPointIsValidPublicKey(e))

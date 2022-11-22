@@ -34,7 +34,7 @@ import opened Raft__CTypes_i
 //    Grammars for the Rafy types
 ////////////////////////////////////////////////////////////////////
 function method EndPoint_grammar() : G { GByteArray }
-function method CLogEntry_grammar() : G { GTuple([GUint64, GUint64, GByteArray, GUint64, GUint64]) }
+function method CLogEntry_grammar() : G { GTuple([GUint64, GUint64, GByteArray, GUint64, GUint64, EndPoint_grammar()]) }
 function method CLogEntrySeq_grammar() : G { GArray(CLogEntry_grammar()) }
 
 ////////////////////////////////////////////////////////////////////
@@ -88,7 +88,7 @@ function method parse_LogEntry(val:V) : CLogEntry
   ensures CLogEntryIsAbstractable(parse_LogEntry(val))
 {
   assert ValInGrammar(val, CLogEntry_grammar());
-  CLogEntry(val.t[0].u, val.t[1].u, val.t[2].b, val.t[3].u, val.t[4].u)
+  CLogEntry(val.t[0].u, val.t[1].u, val.t[2].b, val.t[3].u, val.t[4].u, parse_EndPoint(val.t[5]))
 }
 
 function method parse_Message_RequestVote(val:V) : CMessage
@@ -343,7 +343,8 @@ method MarshallLogEntry(c:CLogEntry) returns (val:V)
   ensures parse_LogEntry(val) == c
 {
   var marshalled_app_req := MarshallCAppRequest(c.req);
-  val := VTuple([VUint64(c.term), VUint64(c.index), marshalled_app_req, VUint64(c.seqno), VUint64(c.is_commited)]);
+  var marshalled_client_ep := MarshallEndPoint(c.client_ep);
+  val := VTuple([VUint64(c.term), VUint64(c.index), marshalled_app_req, VUint64(c.seqno), VUint64(c.is_commited), marshalled_client_ep]);
   assert ValInGrammar(val, CLogEntry_grammar());
 }
 
@@ -541,16 +542,17 @@ lemma lemma_CLogEntryBound(c:CLogEntry, val:V)
   requires ValInGrammar(val, CLogEntry_grammar())
   requires ValidLogEntry(c)
   requires parse_LogEntry(val) == c
-  ensures SizeOfV(val) <= 40 + MaxAppRequestSize()
+  ensures SizeOfV(val) <= 48 + MaxAppRequestSize() + MaxEndpointSize()
 {
   assert ValInGrammar(val, CLogEntry_grammar());
-  lemma_VSizeSeqSum5(val);
+  lemma_VSizeSeqSum6(val);
   assert SizeOfV(val.t[0]) == 8;
   assert SizeOfV(val.t[1]) == 8; 
   assert SizeOfV(val.t[2]) <= 8 + MaxAppRequestSize();
   assert SizeOfV(val.t[3]) == 8;
   assert SizeOfV(val.t[4]) == 8;
-  assert SizeOfV(val) <= 40 + MaxAppRequestSize();
+  assert SizeOfV(val.t[5]) <= 8 + MaxEndpointSize();
+  assert SizeOfV(val) <= 48 + MaxAppRequestSize() + MaxEndpointSize();
 }
 
 
@@ -559,19 +561,19 @@ lemma lemma_CLogEntrySeqBound(c:seq<CLogEntry>, val:V)
   requires ValidLogEntrySeq(c)
   requires parse_LogEntrySeq(val) == c
   decreases |c|
-  ensures SeqSum(val.a) <= (40 + MaxAppRequestSize())*|val.a|
+  ensures SeqSum(val.a) <= (48 + MaxAppRequestSize() + MaxEndpointSize())*|val.a|
 {
   ghost var garray := GArray(CLogEntry_grammar());
   assert ValInGrammar(val, garray);
   reveal SeqSum();
   if |val.a| == 0 {
-    assert SeqSum(val.a) <= (40 + MaxAppRequestSize())*|val.a|;
+    assert SeqSum(val.a) <= (48 + MaxAppRequestSize() + MaxEndpointSize())*|val.a|;
   } else {
     var req := parse_LogEntry(val.a[0]);
     var restVal:V := VArray(val.a[1..]);
     var rest := parse_LogEntrySeq(restVal);
     assert c == [req] + rest;
-    var x := 40 + MaxAppRequestSize();
+    var x := 48 + MaxAppRequestSize() + MaxEndpointSize();
     var N := |val.a|;
     lemma_CLogEntrySeqBound(rest, restVal);
     assert SeqSum(val.a[1..]) <= x * (N-1);
@@ -615,20 +617,20 @@ lemma lemma_MarshallableBound(c:CMessage, val:V)
     assert SizeOfV(val.val.t[2]) <= 8;
     assert SizeOfV(val.val.t[3]) == 8;
     lemma_CLogEntrySeqBound(c.entries, val.val.t[4]);
-    assert SizeOfV(val.val.t[4]) <= 8 + (40 + MaxAppRequestSize())*|val.val.t[4].a|;
+    assert SizeOfV(val.val.t[4]) <= 8 + (48 + MaxAppRequestSize() + MaxEndpointSize())*|val.val.t[4].a|;
     assert |val.val.t[4].a| <= LogEntrySeqSizeLimit();
     calc {
       SizeOfV(val.val.t[4]);
       8 + SeqSum(val.val.t[4].a);
       <=
-      8 + (40 + MaxAppRequestSize())*|val.val.t[4].a|;
+      8 + (48 + MaxAppRequestSize() + MaxEndpointSize())*|val.val.t[4].a|;
       <= { lemma_mul_is_commutative(|val.val.t[4].a|, LogEntrySeqSizeLimit());
-          lemma_mul_is_commutative(|val.val.t[4].a|, 40 + MaxAppRequestSize());
-          lemma_mul_inequality(|val.val.t[4].a|, LogEntrySeqSizeLimit(), 40 + MaxAppRequestSize());
+          lemma_mul_is_commutative(|val.val.t[4].a|, 48 + MaxAppRequestSize() + MaxEndpointSize());
+          lemma_mul_inequality(|val.val.t[4].a|, LogEntrySeqSizeLimit(), 48 + MaxAppRequestSize() + MaxEndpointSize());
         }
-      8 + (40 + MaxAppRequestSize())*LogEntrySeqSizeLimit();
+      8 + (48 + MaxAppRequestSize() + MaxEndpointSize())*LogEntrySeqSizeLimit();
     }
-    assert SizeOfV(val.val.t[4]) <= 8 + (40 + MaxAppRequestSize())*LogEntrySeqSizeLimit();
+    assert SizeOfV(val.val.t[4]) <= 8 + (48 + MaxAppRequestSize() + MaxEndpointSize())*LogEntrySeqSizeLimit();
     assert SizeOfV(val.val.t[5]) == 8;
     lemma_VSizeSeqSum6(val.val);
     calc {
@@ -639,18 +641,18 @@ lemma lemma_MarshallableBound(c:CMessage, val:V)
       <=
       8 + 8 + 8 + MaxEndpointSize() + 8 + 8 + SizeOfV(val.val.t[4]) + 8;
       <=
-      8 + 8 + 8 + MaxEndpointSize() + 8 + 8 + 8 + (40 + MaxAppRequestSize())*|val.val.t[4].a| + 8;
+      8 + 8 + 8 + MaxEndpointSize() + 8 + 8 + 8 + (48 + MaxAppRequestSize() + MaxEndpointSize())*|val.val.t[4].a| + 8;
       ==
-      56 + MaxEndpointSize() + (40 + MaxAppRequestSize())*|val.val.t[4].a|;
+      56 + MaxEndpointSize() + (48 + MaxAppRequestSize() + MaxEndpointSize())*|val.val.t[4].a|;
       <= {
         lemma_mul_is_commutative(|val.val.t[4].a|, LogEntrySeqSizeLimit());
-        lemma_mul_is_commutative(|val.val.t[4].a|, 40 + MaxAppRequestSize());
-        lemma_mul_inequality(|val.val.t[4].a|, LogEntrySeqSizeLimit(), 40 + MaxAppRequestSize());
+        lemma_mul_is_commutative(|val.val.t[4].a|, 48 + MaxAppRequestSize() + MaxEndpointSize());
+        lemma_mul_inequality(|val.val.t[4].a|, LogEntrySeqSizeLimit(), 48 + MaxAppRequestSize() + MaxEndpointSize());
       }
-      56 + MaxEndpointSize() + (40 + MaxAppRequestSize())*LogEntrySeqSizeLimit();
+      56 + MaxEndpointSize() + (48 + MaxAppRequestSize() + MaxEndpointSize())*LogEntrySeqSizeLimit();
     }
-    assert SizeOfV(val) <= 56 + MaxEndpointSize() + (40 + MaxAppRequestSize())*|val.val.t[4].a|;
-    assert SizeOfV(val) <= 56 + MaxEndpointSize() + (40 + MaxAppRequestSize())*LogEntrySeqSizeLimit();
+    assert SizeOfV(val) <= 56 + MaxEndpointSize() + (48 + MaxAppRequestSize() + MaxEndpointSize())*|val.val.t[4].a|;
+    assert SizeOfV(val) <= 56 + MaxEndpointSize() + (48 + MaxAppRequestSize() + MaxEndpointSize())*LogEntrySeqSizeLimit();
   } else if c.CMessage_AppendEntriesReply? {
     assert ValInGrammar(val.val, CMessage_AppendEntriesReply_grammar());
     assert ValInGrammar(val.val.t[0], GUint64()) && SizeOfV(val.val.t[0]) == 8;

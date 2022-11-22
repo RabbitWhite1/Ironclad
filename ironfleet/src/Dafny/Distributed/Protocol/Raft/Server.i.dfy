@@ -387,9 +387,9 @@ predicate RaftServerNoReceiveNext(s:RaftServer, nextActionIndex:int, s':RaftServ
     false
 }
 
-function RaftServerNumActions() : int
+function method RaftServerNumActions() : int
 {
-  2
+  3
 }
 
 }

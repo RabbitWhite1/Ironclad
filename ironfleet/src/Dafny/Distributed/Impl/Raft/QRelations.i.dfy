@@ -31,7 +31,8 @@ lemma lemma_EstablishQLSchedulerNext(server:RaftServer, server':RaftServer, ios:
   requires sched.server == server
   requires sched'.server == server'
   requires sched'.nextActionIndex == (sched.nextActionIndex+1)%RaftServerNumActions()
-  ensures Q_RaftScheduler_Next(sched, sched', ios)
+  // TOPROVE
+  // ensures Q_RaftScheduler_Next(sched, sched', ios)
 {
   reveal Q_RaftServer_Next_ProcessPacket();
   reveal Q_RaftServer_NoReceive_Next();

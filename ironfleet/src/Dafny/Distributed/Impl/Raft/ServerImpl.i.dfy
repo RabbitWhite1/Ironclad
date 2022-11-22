@@ -102,11 +102,15 @@ class ServerImpl
     && current_term as int <= MaxLogEntryTerm()
     // Log
     && 1 <= |log| <= ServerMaxLogSize() as int
-    && log[0] == CLogEntry(0, 0, [], 0, 1)
+    && log[0] == CLogEntry(0, 0, [], 0, 1, config.global_config.server_eps[0])
     && (forall i :: 0 <= i < |log| ==> ValidLogEntry(log[i]))
     // TODO: this may not be true when truncating
     && (forall i :: 0 <= i < |log| ==> log[i].index as int == i)
     && LogEntrySeqIndexIncreasing(log)
+    // commit_index
+    // && 0 <= commit_index < |log| as uint64
+    // && last_applied <= commit_index
+    // next_index and match_index
     && (
       role.Leader? ==> (
         forall ep :: ep in config.global_config.server_eps ==> (
@@ -234,10 +238,12 @@ class ServerImpl
     this.msg_grammar := CMessage_grammar();
     this.repr := { this } + NetClientRepr(net_client);
     this.current_leader := Some(this.config.global_config.server_eps[0]);
-    this.log := [CLogEntry(0, 0, [], 0, 1)];
+    this.log := [CLogEntry(0, 0, [], 0, 1, config.global_config.server_eps[0])];
     this.role := Follower;
     // TODO: Remove this
     this.current_term := 1;
+    this.last_applied := 0;
+    this.commit_index := 0;
     assert LastLogEntryIndex() == 0;
     if this.current_leader.Some? && this.config.server_ep == this.current_leader.v {
       assert MaxLogEntryIndex() - LastLogEntryIndex() as int >= 1;
@@ -308,7 +314,8 @@ class ServerImpl
     this.log := this.log + entries;
   }
 
-  method CreateLogEntry(seqno_req:uint64, req:CAppRequest) returns (ok:bool, entry:CLogEntry)
+  method CreateLogEntry(client_ep:EndPoint, seqno_req:uint64, req:CAppRequest) returns (ok:bool, entry:CLogEntry)
+    requires EndPointIsValidPublicKey(client_ep)
     requires this.Valid()
     requires 0 <= seqno_req as int <= MaxSeqno()
     requires CAppRequestMarshallable(req)
@@ -326,8 +333,70 @@ class ServerImpl
       return;
     }
 
-    entry := CLogEntry(this.current_term, last_log_index + 1, req, seqno_req, /*is_commited*/0);
+    entry := CLogEntry(this.current_term, last_log_index + 1, req, seqno_req, /*is_commited*/0, client_ep);
     ok := true;
+  }
+
+  method TryToIncreaseCommitIndexUntil(index:uint64) returns (ok:bool)
+    requires this.role == Leader
+    requires Valid()
+    modifies this
+    ensures Valid()
+    ensures this.repr == old(this.repr)
+    ensures this.nextActionIndex == old(this.nextActionIndex)
+  {
+    if (this.commit_index >= MaxLogEntryIndex() as uint64 
+      || index >= MaxLogEntryIndex() as uint64
+      || index >= |log| as uint64)
+    {
+      ok := false;
+      return;
+    } else if (this.commit_index >= index) {
+      // already commit, but still ok.
+      ok := true;
+      return;
+    } else {
+      ok := true;
+    }
+    var i:uint64 := this.commit_index + 1;
+    assert index < |log| as uint64;
+    while i - 1 < index
+      invariant this.commit_index <= i - 1 <= index
+      decreases index - (i - 1)
+      invariant i <= index + 1
+      invariant |log| <= ServerMaxLogSize()
+      invariant index < |log| as uint64
+      invariant Valid()
+      invariant this.role == Leader
+      invariant this.repr == old(this.repr)
+      invariant this.nextActionIndex == old(this.nextActionIndex)
+    {
+      var count:uint64 := 0;
+      for ep_id:uint64 := 0 to |this.config.global_config.server_eps| as uint64 - 1
+        invariant Valid()
+        invariant this.role == Leader
+        invariant i <= index + 1
+        invariant |log| <= ServerMaxLogSize()
+        invariant index < |log| as uint64
+        invariant count <= ep_id
+        invariant this.repr == old(this.repr)
+        invariant this.nextActionIndex == old(this.nextActionIndex)
+      {
+        var ep := this.config.global_config.server_eps[ep_id];
+        assert forall ep :: ep in config.global_config.server_eps ==> ep in match_index;
+        if this.match_index[ep] >= i {
+          count := count + 1;
+        }
+      }
+      assert 0 <= commit_index < |log| as uint64;
+      if (count >= CRaftMinQuorumSize(this.config.global_config)) {
+        this.commit_index := i;
+      } else {
+        break;
+      }
+      assert 0 <= commit_index == i <= index + 1 <= |log| as uint64;
+      i := i + 1;
+    }
   }
 
   method PrepareAppendEntriesPacket(ep:EndPoint, is_heartbeat:bool) returns (ok:bool, packet:CPacket)
@@ -365,7 +434,6 @@ class ServerImpl
     var leader_ep := this.config.server_ep;
 
     var last_log_entry := GetLastLogEntry();
-    print "next_index=", next_index, ", last_log_entry.index=", last_log_entry.index, "\n";
     if next_index <= last_log_entry.index || is_heartbeat {
       ok := true;
       packet := CPacket(

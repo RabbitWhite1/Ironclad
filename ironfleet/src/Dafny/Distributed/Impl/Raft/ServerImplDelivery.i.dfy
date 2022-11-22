@@ -205,7 +205,7 @@ method DeliverOutboundPackets(r:ServerImpl, packets:OutboundPackets) returns (ok
   ensures r.Env() == old(r.Env())
   // ensures r.replica == old(r.replica)
   ensures ok ==>
-            &&  r.Valid()
+            && r.Valid()
             && r.nextActionIndex == old(r.nextActionIndex)
             && AllIosAreSends(ios)
             // && AbstractifyOutboundCPacketsToSeqOfRaftPackets(packets) == ExtractSentPacketsFromIos(ios)

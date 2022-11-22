@@ -88,6 +88,11 @@ namespace IronRaftClient
 
         UInt64 replyOk = IoEncoder.ExtractUInt64(replyBytes, 16);
         UInt64 leader_id = IoEncoder.ExtractUInt64(replyBytes, 24);
+        if (replyOk != 1) {
+          primaryServerIndex = (int)leader_id;
+          scheduler.SendPacket(serverPublicKeys[primaryServerIndex], requestMessage);
+          continue;
+        }
         UInt64 replyLength = IoEncoder.ExtractUInt64(replyBytes, 32);
         if (replyLength + 40 != (UInt64)replyBytes.Length) {
           throw new Exception(String.Format("Got Raft reply with invalid encoded length ({0} instead of {1})",

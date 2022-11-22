@@ -85,7 +85,7 @@ method Server_Next_ProcessRequest(server_impl:ServerImpl, ghost old_net_history:
     // create entry
     var entry;
     print "trying to create log\n";
-    ok, entry := server_impl.CreateLogEntry(recved_msg.seqno_req, recved_msg.req);
+    ok, entry := server_impl.CreateLogEntry(rr.cpacket.src, recved_msg.seqno_req, recved_msg.req);
     print "created log: ", ok, "\n";
     if (!ok) {
       ok := true;
@@ -346,6 +346,15 @@ method Server_HandleAppendEntriesReply(server_impl:ServerImpl, ghost old_net_his
         server_impl.match_index := server_impl.match_index[ep := msg.match_index];
       }
       server_impl.next_index := server_impl.next_index[ep := server_impl.match_index[ep] + 1];
+      // Update commit_index
+      ok := server_impl.TryToIncreaseCommitIndexUntil(server_impl.match_index[ep]);
+      if (!ok) { 
+        print "[Error] TryToIncreaseCommitIndexUntil failed, ", server_impl.commit_index, "\n";
+        ok := true;
+        return;
+      } else {
+        print "[Info] Committed up to ", server_impl.commit_index, "\n";
+      }
     } else {
       var decreased_index;
       if server_impl.next_index[ep] > 1 {
@@ -419,6 +428,11 @@ method Server_Next_ProcessPacketX(server_impl:ServerImpl)
       }
     } else {
       assert msg.CMessage_AppendEntries? || msg.CMessage_AppendEntriesReply? || msg.CMessage_RequestVote? || msg.CMessage_RequestVoteReply?;
+      // ignore outside packets for inside operations
+      if (rr.cpacket.src !in server_impl.config.global_config.server_eps) {
+        return;
+      }
+      var src_id := GetEndPointIndex(server_impl.config.global_config, rr.cpacket.src);
       if (msg.CMessage_AppendEntries?) {
         // ignore packet from self
         if (rr.cpacket.src == server_impl.config.server_ep) {
@@ -432,7 +446,7 @@ method Server_Next_ProcessPacketX(server_impl:ServerImpl)
           return;
         }
         print "server ", my_idx, "(is_leader=", server_impl.role.Leader?, 
-          ") received AppendEntriesReply(term=", msg.term, ",success=", msg.success, "match_index=", msg.match_index, ")\n";
+          ") received from ", src_id, " AppendEntriesReply(term=", msg.term, ",success=", msg.success, "match_index=", msg.match_index, ")\n";
         ok, net_event_log, ios := Server_HandleAppendEntriesReply(server_impl, old_net_history, rr, receive_event);
       } else {
         return;

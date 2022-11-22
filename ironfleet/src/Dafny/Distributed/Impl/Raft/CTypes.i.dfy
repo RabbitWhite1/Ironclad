@@ -1,10 +1,14 @@
+include "../../Common/Framework/Environment.s.dfy"
 include "../../Common/Native/Io.s.dfy"
 include "../../Common/Native/NativeTypes.s.dfy"
 include "../../Protocol/Raft/Types.i.dfy"
+include "../Common/NetClient.i.dfy"
 include "AppInterface.i.dfy"
 
 module Raft__CTypes_i {
 
+import opened Environment_s
+import opened Common__NetClient_i
 import opened Native__Io_s
 import opened Native__NativeTypes_s
 import opened Raft__AppInterface_i
@@ -17,7 +21,7 @@ function AbstractifyCClockReadingToClockReading(cclock:CClockReading) : ClockRea
   ClockReading(cclock.t as int)
 }
 
-datatype CLogEntry = CLogEntry(term:uint64, index:uint64, req:CAppRequest, seqno:uint64, is_commited:uint64)
+datatype CLogEntry = CLogEntry(term:uint64, index:uint64, req:CAppRequest, seqno:uint64, is_commited:uint64, client_ep:EndPoint)
 
 // for `log` in server_impl
 function method ServerMaxLogSize() : int
@@ -43,6 +47,7 @@ predicate method ValidLogEntry(entry:CLogEntry) {
   && 0 <= entry.seqno <= MaxSeqno() as uint64
   && (entry.is_commited == 0 || entry.is_commited == 1)
   && CAppRequestMarshallable(entry.req)
+  && EndPointIsValidPublicKey(entry.client_ep)
 }
 
 function method LogEntrySeqSizeLimit() : int { 100 }
