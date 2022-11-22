@@ -67,20 +67,31 @@ method Server_Next_NoReceive_ReadClock(server_impl:ServerImpl)
     ghost var log_tail := [];
     ghost var ios_tail := [];
     ghost var preDeliveryHistory := server_impl.Env().net.history();
+    // Default return
+    net_event_log := log_head;
+    ios := ios_head;
+    ok := true;
 
     if (server_impl.role.Leader?) {
       if (clock.t >= server_impl.next_heartbeat_time) {
         var const_params := server_impl.config.global_config.params;
         var next_heartbeat_time := UpperBoundedAdditionImpl(clock.t, const_params.heartbeat_timeout, const_params.max_integer_value);
         server_impl.next_heartbeat_time := next_heartbeat_time;
-        var msg := CMessage_AppendEntries(server_impl.current_term, server_impl.config.server_ep, 0, 0, [], 0);
-        var packets := BuildBroadcastToEveryone(server_impl.config.global_config, server_impl.config.server_ep, msg);
-        var packets_sent := Broadcast(packets);
-        ok, log_tail, ios_tail := DeliverOutboundPackets(server_impl, packets_sent);
+        
+        // Create packets
+        var outbound_packets:seq<CPacket> := [];
+        ok, outbound_packets := Server_CreateAppendEntriesForAll(server_impl);
+        if (!ok) {
+          ok := true;
+          return;
+        }
+        assert |outbound_packets| <= |server_impl.config.global_config.server_eps| <= 0xFFFF_FFFF_FFFF_FFFF;
+        assert (forall p :: p in outbound_packets ==> CPacketIsSendable(p));
+        ok, log_tail, ios_tail := DeliverOutboundPackets(server_impl, PacketSequence(outbound_packets));
         if (!ok) { return; }
-        // print "I broadcast heartbeat!\n";
         ios := ios_head + ios_tail;
         net_event_log := log_head + log_tail;
+        // print "I broadcast heartbeat!\n";
         assert forall i::0<=i<|log_tail| ==> AbstractifyNetEventToRaftIo(log_tail[i]) == ios_tail[i];
         assert forall i::0<=i<|log_tail| ==> log_tail[i].LIoOpSend? && ios_tail[i].LIoOpSend?;
         assert forall i :: 1 <= i < |net_event_log| ==> net_event_log[i].LIoOpSend?;

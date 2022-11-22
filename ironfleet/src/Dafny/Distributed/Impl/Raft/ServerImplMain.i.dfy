@@ -7,6 +7,7 @@ include "../../Protocol/Raft/Types.i.dfy"
 include "../Common/GenericMarshalling.i.dfy"
 include "NetRaft.i.dfy"
 include "CTypes.i.dfy"
+include "CMessage.i.dfy"
 include "PacketParsing.i.dfy"
 include "QRelations.i.dfy"
 include "ServerImpl.i.dfy"
@@ -27,6 +28,7 @@ import opened Common__GenericMarshalling_i
 import opened Common__NetClient_i
 import opened Raft__NetRaft_i
 import opened Raft__CTypes_i
+import opened Raft__CMessage_i
 import opened Raft__PacketParsing_i
 import opened Raft__QRelations_i
 import opened Raft__ServerImpl_i
@@ -98,7 +100,8 @@ method {:timeLimitMultiplier 2} ServerNextMainProcessPacketX(server_impl:ServerI
   assert NetClientIsValid(net_client_old);
 
   ghost var server := server_impl.AbstractifyToRaftServer();
-  server_impl.nextActionIndex := 1;
+  var nextActionIndex' := rollActionIndex(server_impl.nextActionIndex);
+  server_impl.nextActionIndex := nextActionIndex';
   ghost var scheduler := server_impl.AbstractifyToRaftServerScheduler();
 
   // Mention unchanged predicates over mutable state in the new heap.
@@ -129,55 +132,55 @@ method {:timeLimitMultiplier 2} ServerNextMainProcessPacketX(server_impl:ServerI
   // }
 }
 
-method ServerNextMainReadClock(r:ServerImpl)
+method ServerNextMainReadClock(server_impl:ServerImpl)
   returns (ok:bool, ghost netEventLog:seq<NetEvent>, ghost ios:seq<RaftIo>)
-  requires r.Valid()
-  requires r.nextActionIndex == 1
-  modifies r.repr
-  ensures r.repr == old(r.repr)
-  ensures r.net_client != null
-  ensures r.Env().Valid() && r.Env().ok.ok() ==> ok
-  ensures r.Env() == old(r.Env());
+  requires server_impl.Valid()
+  requires server_impl.nextActionIndex == 1
+  modifies server_impl.repr
+  ensures server_impl.repr == old(server_impl.repr)
+  ensures server_impl.net_client != null
+  ensures server_impl.Env().Valid() && server_impl.Env().ok.ok() ==> ok
+  ensures server_impl.Env() == old(server_impl.Env());
   ensures ok ==>
-            && r.Valid()
+            && server_impl.Valid()
             // TOPROVE
             // && Q_RaftServerScheduler_Next(old(r.AbstractifyToRaftServerScheduler()), r.AbstractifyToRaftServerScheduler(), ios)
             && RawIoConsistentWithSpecIO(netEventLog, ios)
             && OnlySentMarshallableData(netEventLog)
-            && old(r.Env().net.history()) + netEventLog == r.Env().net.history()
+            && old(server_impl.Env().net.history()) + netEventLog == server_impl.Env().net.history()
             && forall i :: 0 <= i < |netEventLog| - 1 ==> netEventLog[i].LIoOpReceive? || netEventLog[i+1].LIoOpSend?
 {
-  var curActionIndex := r.nextActionIndex;
+  var curActionIndex := server_impl.nextActionIndex;
 
-  ghost var server_old := old(r.AbstractifyToRaftServer());
-  ghost var scheduler_old := old(r.AbstractifyToRaftServerScheduler());
+  ghost var server_old := old(server_impl.AbstractifyToRaftServer());
+  ghost var scheduler_old := old(server_impl.AbstractifyToRaftServerScheduler());
 
   assert scheduler_old.server == server_old;
-  ok, netEventLog, ios := Server_Next_NoReceive_ReadClock(r);
+  ok, netEventLog, ios := Server_Next_NoReceive_ReadClock(server_impl);
   if (!ok) { return; }
 
-  assert r.Valid();
+  assert server_impl.Valid();
 
   // Mention unchanged predicates over mutable state in the old heap.
-  ghost var net_client_old := r.net_client;
-  ghost var net_addr_old := r.net_client.MyPublicKey();
+  ghost var net_client_old := server_impl.net_client;
+  ghost var net_addr_old := server_impl.net_client.MyPublicKey();
   assert NetClientIsValid(net_client_old);
 
-  ghost var replica := r.AbstractifyToRaftServer();
-  var nextActionIndex' := rollActionIndex(r.nextActionIndex);
-  r.nextActionIndex := nextActionIndex';
-  ghost var scheduler := r.AbstractifyToRaftServerScheduler();
+  ghost var replica := server_impl.AbstractifyToRaftServer();
+  var nextActionIndex' := rollActionIndex(server_impl.nextActionIndex);
+  server_impl.nextActionIndex := nextActionIndex';
+  ghost var scheduler := server_impl.AbstractifyToRaftServerScheduler();
 
   // Mention unchanged predicates over mutable state in the new heap.
-  assert net_client_old == r.net_client;
-  assert NetClientIsValid(r.net_client);
-  assert net_addr_old == r.net_client.MyPublicKey();
+  assert net_client_old == server_impl.net_client;
+  assert NetClientIsValid(server_impl.net_client);
+  assert net_addr_old == server_impl.net_client.MyPublicKey();
 
-  assert r.Valid();
+  assert server_impl.Valid();
         
   calc {
     scheduler.nextActionIndex;
-    r.nextActionIndex as int;
+    server_impl.nextActionIndex as int;
     nextActionIndex' as int;
     ((curActionIndex+1) as int)%RaftServerNumActions();
     (scheduler_old.nextActionIndex+1)%RaftServerNumActions();

@@ -1916,6 +1916,30 @@ lemma lemma_VSizeSeqSum4(val:V)
   }
 }
 
+lemma lemma_VSizeSeqSum5(val:V)
+  requires val.VTuple?
+  requires |val.t| == 5
+  ensures  SizeOfV(val) == SizeOfV(val.t[0]) + SizeOfV(val.t[1]) + SizeOfV(val.t[2]) + SizeOfV(val.t[3]) + SizeOfV(val.t[4])
+{
+  calc {
+    SeqSum(val.t);
+      { reveal SeqSum(); }
+    SizeOfV(val.t[0]) + SeqSum(val.t[1..]);
+      { reveal SeqSum(); }
+    SizeOfV(val.t[0]) + SizeOfV(val.t[1]) + SeqSum(val.t[2..]);
+      { reveal SeqSum(); }
+    SizeOfV(val.t[0]) + SizeOfV(val.t[1]) + SizeOfV(val.t[2]) + SeqSum(val.t[3..]);
+      { reveal SeqSum(); }
+    SizeOfV(val.t[0]) + SizeOfV(val.t[1]) + SizeOfV(val.t[2]) + SizeOfV(val.t[3]) + SeqSum(val.t[4..]);
+      { reveal SeqSum(); }
+    SizeOfV(val.t[0]) + SizeOfV(val.t[1]) + SizeOfV(val.t[2]) + SizeOfV(val.t[3]) + SizeOfV(val.t[4]) + SeqSum(val.t[5..]);
+      { assert val.t[5..] == []; }        // OBSERVE
+    SizeOfV(val.t[0]) + SizeOfV(val.t[1]) + SizeOfV(val.t[2]) + SizeOfV(val.t[3]) + SizeOfV(val.t[4]) + SeqSum([]);
+      { reveal SeqSum(); }
+    SizeOfV(val.t[0]) + SizeOfV(val.t[1]) + SizeOfV(val.t[2]) + SizeOfV(val.t[3]) + SizeOfV(val.t[4]);
+  }
+}
+
 lemma lemma_VSizeSeqSum6(val:V)
   requires val.VTuple?
   requires |val.t| == 6

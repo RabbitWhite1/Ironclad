@@ -48,8 +48,18 @@ predicate method ValidRequestVote(c:CMessage)
 
 predicate method ValidAppendEntries(c:CMessage)
 {
-  && c.CMessage_AppendEntries? ==> EndPointIsValidPublicKey(c.leader_ep)
-  && ValidLogEntrySeq(c.entries)
+  && c.CMessage_AppendEntries? ==> (
+    && EndPointIsValidPublicKey(c.leader_ep)
+    && ValidLogEntrySeq(c.entries)
+    && ValidLogEntrySeq(c.entries)
+    && (|c.entries| > 0 ==> (
+        && LogEntrySeqIndexIncreasing(c.entries) 
+        && c.entries[0].index as int == c.prev_log_index as int + 1
+        && forall i :: 0 <= i < |c.entries| ==> i + c.prev_log_index as int + 1 == c.entries[i].index as int
+        && |c.entries| + c.prev_log_index as int + 1 <= ServerMaxLogSize()
+      )
+    )
+  )
 }
 
 // CMessage
@@ -57,10 +67,10 @@ predicate CMessageIsAbstractable(msg:CMessage) {
   // TODO: unlikely all are true
   match msg {
     case CMessage_Invalid() => true
-    case CMessage_RequestVote(_, _, _, _) => true
-    case CMessage_RequestVoteReply(_, _) => true
-    case CMessage_AppendEntries(_, _, _, _, _, _) => true
-    case CMessage_AppendEntriesReply(_, _, _) => true
+    case CMessage_RequestVote(term, _, _, _) => (term as int <= 0xFFFF_FFFF_FFFF_FFFF)
+    case CMessage_RequestVoteReply(term, _) => (term as int <= 0xFFFF_FFFF_FFFF_FFFF)
+    case CMessage_AppendEntries(term, _, _, _, _, _) => (term as int <= 0xFFFF_FFFF_FFFF_FFFF)
+    case CMessage_AppendEntriesReply(term, _, _) => (term as int <= 0xFFFF_FFFF_FFFF_FFFF)
     case CMessage_Request(_, _) => true
     case CMessage_Reply(_, _, _, _) => true
   }

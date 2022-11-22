@@ -12,10 +12,12 @@ type RaftEnvironment = LEnvironment<EndPoint, RaftMessage>
 type RaftPacket = LPacket<EndPoint, RaftMessage>
 type RaftIo = LIoOp<EndPoint, RaftMessage>
 
-datatype LogEntry = LogEntry(term:int, index:int, req:AppRequest, is_commited:bool)
+datatype LogEntry = LogEntry(term:int, index:int, req:AppRequest, seqno:int, is_commited:bool)
 
 predicate LogEntryValid(entry:LogEntry) {
-  && entry.term > 0 && entry.index > 0
+  && entry.term > 0 
+  && entry.index > 0 
+  && entry.seqno >= 0
 }
 
 datatype RaftMessage =
