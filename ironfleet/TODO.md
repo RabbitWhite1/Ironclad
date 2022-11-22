@@ -36,16 +36,16 @@
         - [ ] handle messages
           - [ ] RequestVote
           - [ ] RequestVoteReply
-          - [ ] appendEntries
+          - [x] appendEntries
             - [x] reset next_election_timeout
-            - [ ] reply
-          - [ ] appendEntriesReply
-          - [ ] client request
-          - [ ] client response
+            - [x] reply
+          - [x] appendEntriesReply
+          - [x] client request
+          - [x] client response
         - [x] timeout checking
           - [x] if leader: send heartbeat
           - [ ] if follower: start election
   - [x] Program.cs: the driver for Raft Server
-  - [ ] Client
+  - [x] Client
 
 - additional lemmas for proof

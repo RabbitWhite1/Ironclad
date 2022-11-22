@@ -16,7 +16,7 @@
       - if leader: send heartbeat 
   - Program.cs: the driver for Raft Server
 
-#### Next Week Plan
+#### This Week Plan
 
 - implement a simple KV storage service interface
 - implement client request and reply
