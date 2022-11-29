@@ -62,7 +62,7 @@ namespace IronRaftClient
         }
 
         if (timedOut) {
-          // primaryServerIndex = (primaryServerIndex + 1) % serviceIdentity.Servers.Count();
+          primaryServerIndex = (primaryServerIndex + 1) % serviceIdentity.Servers.Count();
           if (verbose) {
             Console.WriteLine("#timeout; rotating to server {0}", primaryServerIndex);
           }
@@ -89,6 +89,7 @@ namespace IronRaftClient
         UInt64 replyOk = IoEncoder.ExtractUInt64(replyBytes, 16);
         UInt64 leader_id = IoEncoder.ExtractUInt64(replyBytes, 24);
         if (replyOk != 1) {
+          Console.WriteLine("transit leader to {0}\n", leader_id);
           primaryServerIndex = (int)leader_id;
           scheduler.SendPacket(serverPublicKeys[primaryServerIndex], requestMessage);
           continue;

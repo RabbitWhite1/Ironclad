@@ -18,11 +18,11 @@
           - [ ] client response
 
 - Implementation
-  - [ ] Host.i.dfy (`host_init` and `host_next`)
+  - [x] Host.i.dfy (`host_init` and `host_next`)
     - [x] host_init
       - [x] Concrete server definitions
       - [x] cmdline parser
-    - [ ] host_next
+    - [x] host_next
       - [x] message parsing and marshaling
         - [x] grammar
         - [x] demarshal (bytearray -> datatype)
@@ -31,11 +31,11 @@
       - [x] NetRaft.i.dfy: 
         - [x] marshal and send Raft Package
         - [x] receive and demarshall to Raft Package
-      - [ ] server
+      - [x] server
         - [x] ServerImpl
-        - [ ] handle messages
-          - [ ] RequestVote
-          - [ ] RequestVoteReply
+        - [x] handle messages
+          - [x] RequestVote
+          - [x] RequestVoteReply
           - [x] appendEntries
             - [x] reset next_election_timeout
             - [x] reply
@@ -44,8 +44,9 @@
           - [x] client response
         - [x] timeout checking
           - [x] if leader: send heartbeat
-          - [ ] if follower: start election
+          - [x] if follower: start election
   - [x] Program.cs: the driver for Raft Server
   - [x] Client
 
-- additional lemmas for proof
+- Proof
+  - Protocol-level: remove the 

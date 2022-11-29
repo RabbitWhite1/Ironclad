@@ -69,7 +69,7 @@ method {:timeLimitMultiplier 2} ServerNextMainProcessPacketX(server_impl:ServerI
   returns (ok:bool, ghost netEventLog:seq<NetEvent>, ghost ios:seq<RaftIo>)
   requires server_impl.Valid()
   requires server_impl.nextActionIndex == 0
-  modifies server_impl.repr
+  modifies server_impl, server_impl.repr, server_impl.net_client, server_impl.random_generator
   ensures server_impl.repr == old(server_impl.repr)
   ensures server_impl.net_client != null
   ensures server_impl.Env().Valid() && server_impl.Env().ok.ok() ==> ok
@@ -138,7 +138,7 @@ method ServerNextMainReadClock(server_impl:ServerImpl)
   returns (ok:bool, ghost netEventLog:seq<NetEvent>, ghost ios:seq<RaftIo>)
   requires server_impl.Valid()
   requires server_impl.nextActionIndex == 1
-  modifies server_impl.repr
+  modifies server_impl.repr, server_impl.random_generator
   ensures server_impl.repr == old(server_impl.repr)
   ensures server_impl.net_client != null
   ensures server_impl.Env().Valid() && server_impl.Env().ok.ok() ==> ok
@@ -255,7 +255,7 @@ method ServerNextMainCommitAndApply(server_impl:ServerImpl)
 method Server_Next_main(server_impl:ServerImpl)
   returns (ok:bool, ghost net_event_log:seq<NetEvent>, ghost ios:seq<RaftIo>)
   requires server_impl.Valid()
-  modifies server_impl.app_state, server_impl.repr
+  modifies server_impl, server_impl.app_state, server_impl.repr, server_impl.random_generator, server_impl.net_client.env
   ensures server_impl.repr == old(server_impl.repr)
   ensures server_impl.net_client != null
   ensures server_impl.Env().Valid() && server_impl.Env().ok.ok() ==> ok

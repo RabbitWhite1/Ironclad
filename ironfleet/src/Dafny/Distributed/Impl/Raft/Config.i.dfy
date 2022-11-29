@@ -29,7 +29,7 @@ datatype ParamState = ParamState(
 
 predicate ParamStateIsValid(params:ParamState)
 {
-  && params.min_election_timeout <= params.max_election_timeout
+  && params.min_election_timeout < params.max_election_timeout
   && params.heartbeat_timeout > 0
   && params.max_integer_value > 0
 }
@@ -39,6 +39,37 @@ method GenerateElectionTimeout(params:ParamState) returns (t:uint64)
   ensures params.min_election_timeout <= t <= params.max_election_timeout
 {
   t := params.min_election_timeout;
+}
+
+class RandomGenerator {
+  var next:uint64
+  constructor (seed:uint64)
+    ensures this.next == seed
+  {
+    this.next := seed;
+  }
+  method Next() returns (n:uint64)
+    modifies this
+    ensures n == this.next
+  {
+    if (this.next > 0xFFFF_FFFF_FFFF_FFFF / 1103515245) {
+      this.next := this.next % (0xFFFF_FFFF_FFFF_FFFF / 1103515245);
+    }
+    this.next := this.next * 1103515245 + 123456;
+    n := this.next;
+  }
+  method NextInt(min:uint64, max:uint64) returns (n:uint64)
+    requires 0 <= min <= max
+    modifies this
+    ensures min <= n <= max
+  {
+    if (min == max) {
+      return min;
+    } else {
+      var tmp_next := this.Next();
+      n := tmp_next % (max-min) + min;
+    }
+  }
 }
 
 function AbstractifyParamStateToRaftParam(params:ParamState) : RaftParam
@@ -54,8 +85,8 @@ function AbstractifyParamStateToRaftParam(params:ParamState) : RaftParam
 function method StaticParams():ParamState
 {
   ParamState(
-    1000, // min_election_timeout
-    2000, // max_election_timeout
+    2000, // min_election_timeout
+    5000, // max_election_timeout
     100, // heartbeat_timeout
     0x8000_0000_0000_0000 - 1 // max_integer_value
   )
@@ -119,12 +150,15 @@ function AbstractifyConfigStateToRaftConfig(config:ConfigState) : RaftConfig
 
 datatype ServerConfigState = ServerConfigState(
   server_ep:EndPoint,
+  server_id:uint64,
   global_config:ConfigState
 )
 
 predicate ServerConfigStateIsValid(sconfig:ServerConfigState)
 {
   && EndPointIsValidPublicKey(sconfig.server_ep)
+  && 0 <= sconfig.server_id as int < |sconfig.global_config.server_eps|
+  && sconfig.global_config.server_eps[sconfig.server_id] == sconfig.server_ep
   && ConfigStateIsValid(sconfig.global_config)
   && sconfig.server_ep in sconfig.global_config.server_eps
 }
@@ -133,6 +167,7 @@ function AbstractifyServerConfigStateToRaftServerConfig(server_config:ServerConf
 {
   RaftServerConfig(
     server_config.server_ep,
+    server_config.server_id as int,
     AbstractifyConfigStateToRaftConfig(server_config.global_config)
   )
 }
@@ -151,7 +186,8 @@ method InitServerConfigState(my_ep:EndPoint, eps:seq<EndPoint>) returns (sc:Serv
 {
   var params := StaticParams(); 
   var global_config := ConfigState(eps, params);
-  sc := ServerConfigState(my_ep, global_config);
+  var ep_id := GetEndPointIndex(global_config, my_ep);
+  sc := ServerConfigState(my_ep, ep_id, global_config);
 }
 
 function method RaftEndPointIsValid(endPoint:EndPoint, config:ConfigState) : bool

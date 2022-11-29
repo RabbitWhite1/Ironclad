@@ -22,7 +22,7 @@ predicate LogEntryValid(entry:LogEntry) {
 
 datatype RaftMessage =
     RaftMessage_Invalid()
-  | RaftMessage_RequestVote(term:int, candidate_ep:EndPoint, last_log_index:int, last_log_term:int)
+  | RaftMessage_RequestVote(term:int, candidate_id:int, last_log_index:int, last_log_term:int)
   | RaftMessage_RequestVoteReply(term:int, vote_granted:bool)
   | RaftMessage_AppendEntries(term:int, leader_ep:EndPoint, prev_log_index:int, prev_log_term:int, entries:seq<LogEntry>, leader_commit:int)
   | RaftMessage_AppendEntriesReply(term:int, success:bool, match_index:int)

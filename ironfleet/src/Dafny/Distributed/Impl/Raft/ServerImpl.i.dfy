@@ -48,9 +48,9 @@ class ServerImpl
   var next_heartbeat_time:uint64;
   var next_election_time:uint64;
   // persistent state
-  var current_leader:Option<EndPoint>;
+  var current_leader:Option<uint64>;
   var current_term:uint64;
-  var voted_for:Option<EndPoint>;
+  var voted_for:Option<uint64>;
   var log:seq<CLogEntry>;
   // volatile state on all servers
   var commit_index:uint64;
@@ -59,6 +59,9 @@ class ServerImpl
   var next_index:map<EndPoint, uint64>;
   var match_index:map<EndPoint, uint64>;
   var num_replicated:seq<int>; // log index -> num of replicated
+  var vote_granted:map<EndPoint, uint64>; // server_id -> voted?(bool)
+
+  var random_generator:RandomGenerator;
 
   var msg_grammar:G;
 
@@ -80,7 +83,9 @@ class ServerImpl
     next_index := map[];
     match_index := map[];
     num_replicated := [];
+    vote_granted := map[];
     var app_s := AppStateMachine.Initialize();
+    random_generator := new RandomGenerator(1);
     app_state := app_s;
   }
 
@@ -97,19 +102,18 @@ class ServerImpl
     && EndPoint(net_client.MyPublicKey()) == config.server_ep
     && repr == { this } + NetClientRepr(net_client)
     && msg_grammar == CMessage_grammar()
-    && (current_leader.None? || (current_leader.Some? && current_leader.v in config.global_config.server_eps))
-    // Term
+    && (current_leader.None? || (current_leader.Some? && current_leader.v as int < |config.global_config.server_eps|))
+    // term
     && current_term as int <= MaxLogEntryTerm()
-    // Log
+    // log
     && 1 <= |log| <= ServerMaxLogSize() as int
     && log[0] == CLogEntry(0, 0, [], 0, 1, config.global_config.server_eps[0])
     && (forall i :: 0 <= i < |log| ==> ValidLogEntry(log[i]))
     // TODO: this may not be true when truncating
     && (forall i :: 0 <= i < |log| ==> log[i].index as int == i)
     && LogEntrySeqIndexIncreasing(log)
-    // commit_index
-    // && 0 <= commit_index < |log| as uint64
-    // && last_applied <= commit_index
+    // commit_index & last_applied
+    && 0 <= last_applied <= commit_index
     // next_index and match_index
     && (
       role.Leader? ==> (
@@ -119,6 +123,12 @@ class ServerImpl
           && 1 <= next_index[ep] <= |log| as uint64
           && 0 <= match_index[ep] < next_index[ep]
         )
+      )
+    )
+    // vote_granted
+    && (
+      role.Candidate? ==> (
+        forall ep :: ep in this.config.global_config.server_eps ==> ep in this.vote_granted
       )
     )
     && |config.global_config.server_eps| >= 1
@@ -144,9 +154,9 @@ class ServerImpl
       role,
       next_heartbeat_time as int,
       next_election_time as int,
-      current_leader,
+      if current_leader.Some? then Some(current_leader.v as int) else None(),
       current_term as int,
-      voted_for,
+      if voted_for.Some? then Some(voted_for.v as int) else None(),
       AbstractifyCLogEntrySeqToRaftLogEntrySeq(log),
       commit_index as int,
       last_applied as int,
@@ -169,18 +179,48 @@ class ServerImpl
     )
   }
 
+  method BecomeCandidate() returns ()
+    requires this.Valid()
+    modifies this
+    ensures this.role == Candidate
+    ensures this.Valid()
+    ensures this.net_client == old(this.net_client)
+    ensures this.nextActionIndex == old(this.nextActionIndex)
+  {
+    var i := 0;
+
+    while i < |config.global_config.server_eps|
+      invariant 0 <= i <= |config.global_config.server_eps|
+      decreases |config.global_config.server_eps| - i
+      invariant Valid()
+      invariant forall j :: 0 <= j < i ==> config.global_config.server_eps[j] in vote_granted
+      invariant this.net_client == old(this.net_client)
+      invariant this.nextActionIndex == old(this.nextActionIndex)
+    {
+      var ep := config.global_config.server_eps[i];
+      if ep == this.config.server_ep {
+        this.vote_granted := this.vote_granted[ep := 1];
+      } else {
+        this.vote_granted := this.vote_granted[ep := 0];
+      }
+      i := i + 1;
+    }
+    this.role := Candidate;
+  }
+
   method BecomeLeader() returns ()
     requires Valid()
     requires MaxLogEntryIndex() - LastLogEntryIndex() as int >= 1
+    requires this.role == Candidate
     modifies this
     ensures this.role.Leader?
     ensures this.net_client == old(this.net_client)
     ensures Valid()
+    ensures this.nextActionIndex == old(this.nextActionIndex);
   {
     var i := 0;
     var last_log_entry := GetLastLogEntry();
     assert log[|log| - 1].index == last_log_entry.index;
-    this.role := Candidate;
     while i < |config.global_config.server_eps|
       invariant 0 <= i <= |config.global_config.server_eps|
       decreases |config.global_config.server_eps| - i
@@ -198,6 +238,7 @@ class ServerImpl
       invariant Valid()
       invariant log == old(log)
       invariant this.net_client == old(this.net_client)
+      invariant this.nextActionIndex == old(this.nextActionIndex)
     {
       var ep := config.global_config.server_eps[i];
       next_index := next_index[ep := last_log_entry.index + 1];
@@ -211,6 +252,8 @@ class ServerImpl
       i := i + 1;
     }
     this.role := Leader;
+    var my_id := GetEndPointIndex(this.config.global_config, this.config.server_ep);
+    this.current_leader := Some(my_id);
     assert forall ep :: ep in config.global_config.server_eps ==> ep in next_index && ep in match_index;
   }
 
@@ -237,24 +280,31 @@ class ServerImpl
     this.local_addr := EndPoint(net_client.MyPublicKey());
     this.msg_grammar := CMessage_grammar();
     this.repr := { this } + NetClientRepr(net_client);
-    this.current_leader := Some(this.config.global_config.server_eps[0]);
+    this.current_leader := Some(0);
     this.log := [CLogEntry(0, 0, [], 0, 1, config.global_config.server_eps[0])];
     this.role := Follower;
+    var my_id := GetEndPointIndex(this.config.global_config, this.config.server_ep);
+    this.random_generator := new RandomGenerator(my_id);
     // TODO: Remove this
     this.current_term := 1;
     this.last_applied := 0;
     this.commit_index := 0;
     assert LastLogEntryIndex() == 0;
-    if this.current_leader.Some? && this.config.server_ep == this.current_leader.v {
-      assert MaxLogEntryIndex() - LastLogEntryIndex() as int >= 1;
-      this.BecomeLeader();
-      assert net_client.env == nc.env;
-    } else{
-      this.role := Follower;
-      this.current_term := 0;
-    }
+    // if this.current_leader.Some? && this.config.server_id == this.current_leader.v {
+    //   assert MaxLogEntryIndex() - LastLogEntryIndex() as int >= 1;
+    //   this.BecomeCandidate();
+    //   assert net_client.env == nc.env;
+    //   this.BecomeLeader();
+    //   assert net_client.env == nc.env;
+    // } else{
+    //   this.role := Follower;
+    //   this.current_term := 0;
+    // }
+    this.role := Follower;
+    this.current_term := 0;
     assert net_client.env == nc.env;
     ok := true;
+    app_state := AppStateMachine.Initialize();
   }
 
   function Env() : HostEnvironment
@@ -283,6 +333,23 @@ class ServerImpl
     ensures LastLogEntryIndex() as int == |log| - 1
   {
     log[|log| - 1].index
+  }
+
+  method GetLogEntry(index: uint64) returns (log_entry:Option<CLogEntry>)
+    requires Valid()
+    ensures log_entry.Some? ==> (
+      && 0 <= index < |log| as uint64
+      && 0 <= index <= |log| as uint64 - 1
+      && log_entry.v in log
+      && log_entry.v == log[index]
+    )
+    ensures Valid()
+  {
+    if 0 <= index < |log| as uint64 {
+      log_entry := Some(log[index]);
+    } else {
+      log_entry := None;
+    }
   }
 
   method GetLastLogEntry() returns(log_entry:CLogEntry)
@@ -372,7 +439,7 @@ class ServerImpl
       invariant this.nextActionIndex == old(this.nextActionIndex)
     {
       var count:uint64 := 0;
-      for ep_id:uint64 := 0 to |this.config.global_config.server_eps| as uint64 - 1
+      for ep_id:uint64 := 0 to |this.config.global_config.server_eps| as uint64
         invariant Valid()
         invariant this.role == Leader
         invariant i <= index + 1
@@ -415,18 +482,29 @@ class ServerImpl
     ok := false;
     var next_index:uint64 := this.next_index[ep];
     var entries;
-    if is_heartbeat {
-      entries := [];
+    // if is_heartbeat {
+    //   entries := [];
+    // } else {
+    //   var log_index_end:uint64;
+    //   if |this.log| < next_index as int + LogEntrySeqSizeLimit() {
+    //     log_index_end := |this.log| as uint64;
+    //   } else {
+    //     log_index_end := next_index + LogEntrySeqSizeLimit() as uint64;
+    //   }
+    //   entries := this.log[next_index..log_index_end];
+    //   assert |entries| <= LogEntrySeqSizeLimit();
+    // }
+
+    // also send entries even it's heartbeat
+    var log_index_end:uint64;
+    if |this.log| < next_index as int + LogEntrySeqSizeLimit() {
+      log_index_end := |this.log| as uint64;
     } else {
-      var log_index_end:uint64;
-      if |this.log| < next_index as int + LogEntrySeqSizeLimit() {
-        log_index_end := |this.log| as uint64;
-      } else {
-        log_index_end := next_index + LogEntrySeqSizeLimit() as uint64;
-      }
-      entries := this.log[next_index..log_index_end];
-      assert |entries| <= LogEntrySeqSizeLimit();
+      log_index_end := next_index + LogEntrySeqSizeLimit() as uint64;
     }
+    entries := this.log[next_index..log_index_end];
+    assert |entries| <= LogEntrySeqSizeLimit();
+
     var prev_log_index:uint64 := next_index - 1;
     assert prev_log_index >= 0;
     assert prev_log_index as int < |log|;
@@ -434,6 +512,8 @@ class ServerImpl
     var leader_ep := this.config.server_ep;
 
     var last_log_entry := GetLastLogEntry();
+    var ep_id := GetEndPointIndex(this.config.global_config, ep);
+    print "To ", ep_id, ": next_index=", next_index, ",last_log_entry.index=", last_log_entry.index, "\n";
     if next_index <= last_log_entry.index || is_heartbeat {
       ok := true;
       packet := CPacket(
@@ -443,14 +523,36 @@ class ServerImpl
           this.current_term, leader_ep, prev_log_index, prev_log_term, entries, this.commit_index
         )
       );
+      assert CPacketIsSendable(packet);
     } else {
       ok := false;
     }
   }
-}
+
+  method VoteRequestPassed() returns (passed:bool)
+    requires this.role == Candidate
+    requires Valid()
+    ensures Valid()
+  {
+    var count:uint64 := 0;
+    for ep_id:uint64 := 0 to |this.config.global_config.server_eps| as uint64
+      invariant Valid()
+      invariant count <= ep_id <= 0xFFFF_FFFF_FFFF_FFFF
+    {
+      var ep := this.config.global_config.server_eps[ep_id];
+      print "ep_id=", ep_id, ": ", this.vote_granted[ep], "\n";
+      if this.vote_granted[ep] == 1 {
+        count := count + 1;
+      }
+    }
+    print "count=", count, "\n";
+    passed := count >= CRaftMinQuorumSize(this.config.global_config);
+  }
+
+} // end of class ServerImpl
 
 
-method Server_CreateAppendEntriesForAll(server_impl:ServerImpl) returns (ok:bool, outbound_packets:seq<CPacket>)
+method Server_CreateAppendEntriesForAll(server_impl:ServerImpl, is_heartbeat:bool) returns (ok:bool, outbound_packets:seq<CPacket>)
   requires server_impl.Valid()
   requires server_impl.role.Leader?
   ensures server_impl.Valid()
@@ -485,7 +587,7 @@ method Server_CreateAppendEntriesForAll(server_impl:ServerImpl) returns (ok:bool
     var ep := server_impl.config.global_config.server_eps[i];
     if ep != server_impl.config.server_ep {
       var packet;
-      ok, packet := server_impl.PrepareAppendEntriesPacket(ep, false);
+      ok, packet := server_impl.PrepareAppendEntriesPacket(ep, is_heartbeat);
       if (!ok) {
         break;
       }
@@ -496,6 +598,58 @@ method Server_CreateAppendEntriesForAll(server_impl:ServerImpl) returns (ok:bool
     i := i + 1;
     assert |outbound_packets| <= i;
   }
+  ok := true;
+}
+
+method Server_CreateRequestVoteForAll(server_impl:ServerImpl) returns (ok:bool, outbound_packets:seq<CPacket>)
+  requires server_impl.Valid()
+  requires server_impl.role.Candidate?
+  ensures server_impl.Valid()
+  ensures server_impl.role.Candidate?
+  ensures |outbound_packets| <= |server_impl.config.global_config.server_eps|
+  ensures (forall p :: p in outbound_packets ==> (
+    CPacketIsSendable(p) && CPacketIsAbstractable(p) && p.src == server_impl.config.server_ep
+  ))
+  ensures server_impl.Env() == old(server_impl.Env())
+  ensures server_impl.nextActionIndex == old(server_impl.nextActionIndex)
+  ensures server_impl.repr == old(server_impl.repr)
+  ensures ok ==> (
+    && OutboundPacketsIsValid(PacketSequence(outbound_packets))
+  )
+{
+  outbound_packets := [];
+  var i := 0;
+  var my_last_log := server_impl.GetLastLogEntry();
+  while i < |server_impl.config.global_config.server_eps|
+    decreases |server_impl.config.global_config.server_eps| - i
+    invariant server_impl.Valid()
+    invariant 0 <= i <= |server_impl.config.global_config.server_eps|
+    invariant server_impl.role.Candidate?
+    invariant |outbound_packets| <= i
+    invariant |outbound_packets| <= |server_impl.config.global_config.server_eps|
+    invariant (forall p :: p in outbound_packets ==> (
+      CPacketIsSendable(p) && CPacketIsAbstractable(p) && p.src == server_impl.config.server_ep
+    ))
+    invariant server_impl.Env() == old(server_impl.Env())
+    invariant server_impl.nextActionIndex == old(server_impl.nextActionIndex)
+    invariant server_impl.repr == old(server_impl.repr)
+  {
+    var ep := server_impl.config.global_config.server_eps[i];
+    if ep != server_impl.config.server_ep {
+      var msg := CMessage_RequestVote(
+        server_impl.current_term, server_impl.config.server_id, my_last_log.index, my_last_log.term
+      );
+      var packet := CPacket(
+        ep, server_impl.config.server_ep, msg
+      );
+      print "ready to send to ", i, " with RequestVote(", ")\n";
+      assert CPacketIsSendable(packet);
+      outbound_packets := outbound_packets + [packet];
+    }
+    i := i + 1;
+    assert |outbound_packets| <= i;
+  }
+  ok := true;
 }
 
 }

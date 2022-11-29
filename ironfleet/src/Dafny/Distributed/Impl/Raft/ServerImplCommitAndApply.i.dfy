@@ -59,46 +59,52 @@ method Server_Next_CommitAndApply(server_impl:ServerImpl)
   ok := true;
   net_event_log := [];
   ios := [];
-  // ghost var log_tail := [];                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
-  // ghost var ios_tail := [];
-  // var old_next_action_index := server_impl.nextActionIndex;
-  // var old_commit_index := server_impl.commit_index;
-  // var old_last_applied := server_impl.last_applied;
+  ghost var log_tail := [];                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
+  ghost var ios_tail := [];
+  var old_next_action_index := server_impl.nextActionIndex;
+  var old_commit_index := server_impl.commit_index;
+  var old_last_applied := server_impl.last_applied;
 
-  // if server_impl.last_applied >= server_impl.commit_index {
-  //   // nothing to apply
-  //   ok := true;
-  //   return;
-  // }
+  if server_impl.last_applied >= server_impl.commit_index {
+    // nothing to apply
+    ok := true;
+    return;
+  }
 
-  // ok := false;
+  ok := false;
 
-  // assert server_impl.last_applied < server_impl.commit_index < |server_impl.log| as uint64;
-  // assert old_last_applied < server_impl.commit_index < |server_impl.log| as uint64;
-  // var i := server_impl.last_applied + 1;
-  // var log_entry := server_impl.log[i];
-  // var leader_id;
-  // if (server_impl.current_leader.Some?) {
-  //   leader_id := GetEndPointIndex(server_impl.config.global_config, server_impl.current_leader.v);
-  // } else {
-  //   leader_id := GetEndPointIndex(server_impl.config.global_config, server_impl.config.server_ep);
-  // }
-  // assert server_impl.nextActionIndex == old(server_impl.nextActionIndex);
-  // var msg := CMessage_Reply(log_entry.seqno, 1, leader_id, []);
-  // var packet := CPacket(log_entry.client_ep, server_impl.config.server_ep , msg);
-  // var outbound_packets := OutboundPacket(Some(packet));
-  // assert server_impl.last_applied < |server_impl.log| as uint64;
+  assert server_impl.last_applied < server_impl.commit_index;
+  assert old_last_applied < server_impl.commit_index;
+  var i := server_impl.last_applied + 1;
+  if i > |server_impl.log| as uint64 - 1 {
+    // nothing to apply
+    ok := true;
+    return;
+  }
+  var log_entry := server_impl.log[i];
+  var leader_id;
+  if (server_impl.current_leader.Some?) {
+    leader_id := server_impl.current_leader.v;
+  } else {
+    leader_id := GetEndPointIndex(server_impl.config.global_config, server_impl.config.server_ep);
+  }
+  assert server_impl.nextActionIndex == old(server_impl.nextActionIndex);
+  var app_reply := server_impl.app_state.HandleRequest(log_entry.req);
+  var msg := CMessage_Reply(log_entry.seqno, 1, leader_id, app_reply);
+  var packet := CPacket(log_entry.client_ep, server_impl.config.server_ep , msg);
+  var outbound_packets := OutboundPacket(Some(packet));
+  assert server_impl.last_applied < |server_impl.log| as uint64;
 
-  // server_impl.last_applied := server_impl.last_applied  + 1;
+  server_impl.last_applied := server_impl.last_applied  + 1;
 
-  // ok, log_tail, ios_tail := DeliverOutboundPackets(server_impl, outbound_packets);
-  // if (!ok) { return; }
-  // net_event_log := log_tail;
-  // ios := ios_tail;
-  // assert forall i::0<=i<|net_event_log| ==> AbstractifyNetEventToRaftIo(net_event_log[i]) == ios[i];
-  // assert forall i::0<=i<|net_event_log| ==> net_event_log[i].LIoOpSend? && ios[i].LIoOpSend?;
-  // assert forall i :: 1 <= i < |net_event_log| ==> net_event_log[i].LIoOpSend?;
-  // assert forall i :: 0 <= i < |net_event_log| - 1 ==> net_event_log[i].LIoOpReceive? || net_event_log[i+1].LIoOpSend?;
+  ok, log_tail, ios_tail := DeliverOutboundPackets(server_impl, outbound_packets);
+  if (!ok) { return; }
+  net_event_log := log_tail;
+  ios := ios_tail;
+  assert forall i::0<=i<|net_event_log| ==> AbstractifyNetEventToRaftIo(net_event_log[i]) == ios[i];
+  assert forall i::0<=i<|net_event_log| ==> net_event_log[i].LIoOpSend? && ios[i].LIoOpSend?;
+  assert forall i :: 1 <= i < |net_event_log| ==> net_event_log[i].LIoOpSend?;
+  assert forall i :: 0 <= i < |net_event_log| - 1 ==> net_event_log[i].LIoOpReceive? || net_event_log[i+1].LIoOpSend?;
 
 }
 

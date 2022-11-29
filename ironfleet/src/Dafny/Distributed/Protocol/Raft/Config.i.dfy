@@ -30,6 +30,7 @@ datatype RaftConfig = RaftConfig(
 
 datatype RaftServerConfig = RaftServerConfig(
   server_ep:EndPoint,
+  server_id:int,
   global_config:RaftConfig
 )
 

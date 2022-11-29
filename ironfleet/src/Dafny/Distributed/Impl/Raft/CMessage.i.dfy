@@ -28,7 +28,7 @@ import opened Raft__ConfigState_i
 
 datatype CMessage =
     CMessage_Invalid()
-  | CMessage_RequestVote(term:uint64, candidate_ep:EndPoint, last_log_index:uint64, last_log_term:uint64)
+  | CMessage_RequestVote(term:uint64, candidate_id:uint64, last_log_index:uint64, last_log_term:uint64)
   | CMessage_RequestVoteReply(term:uint64, vote_granted:uint64)
   | CMessage_AppendEntries(term:uint64, leader_ep:EndPoint, prev_log_index:uint64, prev_log_term:uint64, entries:seq<CLogEntry>, leader_commit:uint64)
   | CMessage_AppendEntriesReply(term:uint64, success:uint64, match_index:uint64)
@@ -41,9 +41,13 @@ datatype CBroadcast = CBroadcast(src:EndPoint, dsts:seq<EndPoint>, msg:CMessage)
 
 datatype OutboundPackets = Broadcast(broadcast:CBroadcast) | OutboundPacket(p:Option<CPacket>) | PacketSequence(s:seq<CPacket>)
 
+predicate method ValidEndPointId(id:uint64) {
+  id <= 0xFFFF_FFFF_FFFF_FFFF
+}
+
 predicate method ValidRequestVote(c:CMessage)
 {
-  c.CMessage_RequestVote? ==> EndPointIsValidPublicKey(c.candidate_ep)
+  c.CMessage_RequestVote? ==> ValidEndPointId(c.candidate_id)
 }
 
 predicate method ValidAppendEntries(c:CMessage)
@@ -81,7 +85,7 @@ function AbstractifyCMessageToRaftMessage(msg:CMessage) : RaftMessage
 {
   match msg
     case CMessage_Invalid => RaftMessage_Invalid()
-    case CMessage_RequestVote(term, candidate_ep, last_log_index, last_log_term) => RaftMessage_RequestVote(term as int, candidate_ep, last_log_index as int, last_log_term as int)
+    case CMessage_RequestVote(term, candidate_id, last_log_index, last_log_term) => RaftMessage_RequestVote(term as int, candidate_id as int, last_log_index as int, last_log_term as int)
     case CMessage_RequestVoteReply(term, vote_granted) => RaftMessage_RequestVoteReply(term as int, vote_granted == 1)
     case CMessage_AppendEntries(term, leader_ep, prev_log_index, prev_log_term, entries, leader_commit) => RaftMessage_AppendEntries(term as int, leader_ep, prev_log_index as int, prev_log_term as int, AbstractifyCLogEntrySeqToRaftLogEntrySeq(entries), leader_commit as int)
     case CMessage_AppendEntriesReply(term, success, match_index) => RaftMessage_AppendEntriesReply(term as int, success == 1, match_index as int)

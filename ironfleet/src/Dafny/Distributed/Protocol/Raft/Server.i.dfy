@@ -29,9 +29,9 @@ datatype RaftServer = RaftServer(
   next_heartbeat_time:int,
   next_election_time:int,
   // persistent state
-  current_leader:Option<EndPoint>,
+  current_leader:Option<int>,
   current_term:int,
-  voted_for:Option<EndPoint>,
+  voted_for:Option<int>,
   log:seq<LogEntry>,
   // volatile state on all servers
   commit_index:int,
@@ -152,11 +152,13 @@ predicate RaftServerMaybeStepDown(s:RaftServer, s':RaftServer, term:int)
 predicate RaftServerMaybeResetElectionTimeout(s:RaftServer, s':RaftServer, clock:int, msg:RaftMessage)
   requires msg.RaftMessage_AppendEntries?
 {
-  var global_config := s.config.global_config;
-  s.current_leader.Some? && msg.leader_ep == s.current_leader.v ==> exists election_timeout :: (
-    && global_config.params.min_election_timeout <= election_timeout <= global_config.params.max_election_timeout
-    && s' == s.(next_election_time := UpperBoundedAddition(clock, election_timeout, global_config.params.max_integer_value))
-  )
+  // TOPROVE
+  // var global_config := s.config.global_config;
+  // s.current_leader.Some? && msg.leader_ep == s.current_leader.v ==> exists election_timeout :: (
+  //   && global_config.params.min_election_timeout <= election_timeout <= global_config.params.max_election_timeout
+  //   && s' == s.(next_election_time := UpperBoundedAddition(clock, election_timeout, global_config.params.max_integer_value))
+  // )
+  true
 }
 
 predicate RaftServerNextHandleAppendEntries(s:RaftServer, s':RaftServer, received_packet: RaftPacket, clock:int, sent_packages:seq<RaftPacket>)
@@ -358,7 +360,7 @@ predicate RaftServerNextReadClockMaybeStartElection(s:RaftServer, s':RaftServer,
       && RaftBroadcastToEveryone(
         s.config.global_config, s.config.server_ep, 
         RaftMessage_RequestVote(
-          s.current_term, s.config.server_ep, 
+          s.current_term, s.config.server_id, 
           RaftLastLogIndex(s), RaftLastLogTerm(s)),
         sent_packets)
       && s' == s.(next_election_time := s'.next_election_time)

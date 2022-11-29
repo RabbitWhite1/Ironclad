@@ -40,7 +40,7 @@ function method CLogEntrySeq_grammar() : G { GArray(CLogEntry_grammar()) }
 ////////////////////////////////////////////////////////////////////
 //    Grammars for the Raft messages 
 ////////////////////////////////////////////////////////////////////
-function method CMessage_RequestVote_grammar() : G { GTuple([GUint64, EndPoint_grammar(), GUint64, GUint64]) }
+function method CMessage_RequestVote_grammar() : G { GTuple([GUint64, GUint64, GUint64, GUint64]) }
 function method CMessage_RequestVoteReply_grammar() : G { GTuple([GUint64, GUint64]) }
 function method CMessage_AppendEntries_grammar() : G { GTuple([GUint64, EndPoint_grammar(), GUint64, GUint64, CLogEntrySeq_grammar(), GUint64]) }
 function method CMessage_AppendEntriesReply_grammar() : G { GTuple([GUint64, GUint64, GUint64]) }
@@ -98,7 +98,7 @@ function method parse_Message_RequestVote(val:V) : CMessage
   assert ValInGrammar(val, CMessage_RequestVote_grammar());
   CMessage_RequestVote(
     val.t[0].u,
-    parse_EndPoint(val.t[1]),
+    val.t[1].u,
     val.t[2].u,
     val.t[3].u
   )
@@ -276,7 +276,7 @@ function Marshallable(c:CMessage) : bool
 {
   // TODO: this is a hack
   && (!c.CMessage_Invalid?)
-  && (c.CMessage_RequestVote? ==> EndPointIsValidPublicKey(c.candidate_ep))
+  && (c.CMessage_RequestVote? ==> ValidEndPointId(c.candidate_id))
   && (c.CMessage_RequestVoteReply? ==> true)
   && (c.CMessage_AppendEntries? ==> ValidAppendEntries(c) && EndPointIsValidPublicKey(c.leader_ep))
   && (c.CMessage_Request? ==> CAppRequestMarshallable(c.req))
@@ -302,7 +302,7 @@ method DetermineIfMessageMarshallable(msg:CMessage) returns (b:bool)
     b := false;
   }
   else if msg.CMessage_RequestVote? {
-    b := EndPointIsValidPublicKey(msg.candidate_ep);
+    b := ValidEndPointId(msg.candidate_id);
   }
   else if msg.CMessage_RequestVoteReply? {
     b := true;
@@ -380,8 +380,7 @@ method MarshallMessage_RequestVote(c:CMessage) returns (val:V)
   ensures  ValidVal(val)
   ensures  parse_Message_RequestVote(val) == c
 {
-  var marshalled_ep := MarshallEndPoint(c.candidate_ep);
-  val := VTuple([VUint64(c.term), marshalled_ep, VUint64(c.last_log_index), VUint64(c.last_log_term)]);
+  val := VTuple([VUint64(c.term), VUint64(c.candidate_id), VUint64(c.last_log_index), VUint64(c.last_log_term)]);
   assert ValInGrammar(val, CMessage_RequestVote_grammar());
 }
 
@@ -458,7 +457,7 @@ method MarshallMessage(c:CMessage) returns (val:V)
 {
   assert !c.CMessage_Invalid?;
   if c.CMessage_RequestVote? {
-    assert EndPointIsValidPublicKey(c.candidate_ep);
+    assert ValidEndPointId(c.candidate_id);
     var msg := MarshallMessage_RequestVote(c);
     val := VCase(0, msg);
   } else if c.CMessage_RequestVoteReply? {
@@ -597,7 +596,7 @@ lemma lemma_MarshallableBound(c:CMessage, val:V)
   if c.CMessage_RequestVote? {
     assert ValInGrammar(val.val, CMessage_RequestVote_grammar());
     assert ValInGrammar(val.val.t[0], GUint64()) && SizeOfV(val.val.t[0]) == 8;
-    assert ValInGrammar(val.val.t[1], GByteArray()) && SizeOfV(val.val.t[1]) <= 8 + MaxEndpointSize();
+    assert ValInGrammar(val.val.t[1], GUint64()) && SizeOfV(val.val.t[1]) == 8;
     assert ValInGrammar(val.val.t[2], GUint64()) && SizeOfV(val.val.t[2]) == 8;
     assert ValInGrammar(val.val.t[3], GUint64()) && SizeOfV(val.val.t[3]) == 8;
     assert |val.val.t| == 4;
