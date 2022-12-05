@@ -40,6 +40,7 @@ datatype RaftServer = RaftServer(
   next_index:map<EndPoint, int>,
   match_index:map<EndPoint, int>,
   num_replicated:seq<int>, // log index -> num of replicated
+  vote_granted:map<EndPoint, int>, // server_id -> voted?(bool)
   // App
   app:AppState
 )
@@ -53,6 +54,12 @@ predicate RaftServerInit(server:RaftServer, config:RaftServerConfig) {
   && server.last_applied == 0
   && server.next_index == map []
   && server.match_index == map []
+  && server.vote_granted == map []
+}
+
+function method RaftServerNumActions() : int
+{
+  3
 }
 
 ////////////////////////////////////////////////
@@ -66,9 +73,9 @@ predicate SpontaneousIos(ios:seq<RaftIo>, clocks:int)
   && (forall i :: clocks<=i<|ios| ==> ios[i].LIoOpSend?)
 }
 
-function SpontaneousClock(ios:seq<RaftIo>) : ClockReading
+function SpontaneousClock(ios:seq<RaftIo>) : int
 {
-  if SpontaneousIos(ios, 1) then ClockReading(ios[0].t) else ClockReading(0) // nonsense to avoid putting a precondition on this function
+  if SpontaneousIos(ios, 1) then ios[0].t else 0 // nonsense to avoid putting a precondition on this function
 }
 
 ////////////////////////////////////////////////
@@ -116,282 +123,204 @@ predicate RaftBroadcastToEveryone(config:RaftConfig, my_ep:EndPoint, m:RaftMessa
       0 <= idx < |sent_packets| ==> sent_packets[idx] == LPacket(config.server_eps[idx], my_ep, m)
 }
 
-predicate RaftServerSentAppendEntries(s:RaftServer, dst:EndPoint, sent_packet:RaftPacket)
-  requires sent_packet.msg.RaftMessage_AppendEntries?
-{
-  var msg := sent_packet.msg;
-  && dst in s.next_index
-  && var next_index := s.next_index[dst];
-  && sent_packet.dst == dst
-  && sent_packet.src == s.config.server_ep
-  && |msg.entries| > 0
-  && 0 < next_index <= |s.log|
-  && |msg.entries| == |s.log| - next_index
-  && forall i :: 0 <= i < |msg.entries| ==> msg.entries[i] == RaftGetLogEntry(s, s.next_index[dst] + i)
-  && msg.leader_ep == s.config.server_ep
-  && msg.prev_log_index == RaftLastLogIndex(s)
-  && msg.prev_log_term == RaftLastLogTerm(s)
-  && msg.leader_commit == s.commit_index
-}
-
 ////////////////////////////////////////////////
-// Handle received packets
+// ReadClock action
 ////////////////////////////////////////////////
-predicate RaftServerMaybeStepDown(s:RaftServer, s':RaftServer, term:int)
+predicate RaftServerNextReadClock_Leader(s:RaftServer, s':RaftServer, clock:int, sent_packets:seq<RaftPacket>)
 {
-  if s.current_term < term then
-    && s'.role == Follower
-    && s'.voted_for == None()
-    && s'.current_term == term
-  else
-    s'.role == s.role
-    && s'.voted_for == s.voted_for
-    && s'.current_term == s.current_term
-}
-
-predicate RaftServerMaybeResetElectionTimeout(s:RaftServer, s':RaftServer, clock:int, msg:RaftMessage)
-  requires msg.RaftMessage_AppendEntries?
-{
-  // TOPROVE
-  // var global_config := s.config.global_config;
-  // s.current_leader.Some? && msg.leader_ep == s.current_leader.v ==> exists election_timeout :: (
-  //   && global_config.params.min_election_timeout <= election_timeout <= global_config.params.max_election_timeout
-  //   && s' == s.(next_election_time := UpperBoundedAddition(clock, election_timeout, global_config.params.max_integer_value))
-  // )
-  true
-}
-
-predicate RaftServerNextHandleAppendEntries(s:RaftServer, s':RaftServer, received_packet: RaftPacket, clock:int, sent_packages:seq<RaftPacket>)
-  requires received_packet.msg.RaftMessage_AppendEntries?
-{
-  var received_msg := received_packet.msg;
-  // maybe step down
-  && RaftServerMaybeStepDown(s, s', received_packet.msg.term)
-  // handle the entries
-  && received_msg.prev_log_index >= 0
-  && forall entry :: entry in received_packet.msg.entries ==> LogEntryValid(entry)
-  // No matter when receiving this, a follower should reset its election timeout
-  && RaftServerMaybeResetElectionTimeout(s, s', clock, received_msg)
-  && (
-    var entries := received_packet.msg.entries;
-    if (
-      || received_msg.prev_log_index == 0
-      || (&& received_msg.prev_log_index <= |s.log| 
-          && RaftGetLogEntry(s, received_msg.prev_log_index).term == received_msg.prev_log_term
-          )
-    ) then
-      // entries should be appended
-      && |s'.log| == |s.log| + |entries|
-      && forall entry :: entry in entries ==> 0 < entry.index <= |s'.log| && RaftGetLogEntry(s', entry.index) == entry
-      && |sent_packages| == 1
-      && var sent_msg := sent_packages[0].msg;
-        && sent_msg.RaftMessage_AppendEntriesReply?
-        && sent_msg.term == s'.current_term
-        && sent_msg.success == true
-        && sent_msg.match_index == RaftLastLogIndex(s')
-    else
-      // or discarded
-      && s'.log == s.log
-      && |sent_packages| == 1
-      && var sent_msg := sent_packages[0].msg;
-        && sent_msg.RaftMessage_AppendEntriesReply?
-        && sent_msg.term == s'.current_term
-        && sent_msg.success == false
-  )
-}
-
-predicate RaftServerNextHandleAppendEntriesReply(s:RaftServer, s':RaftServer, received_packet: RaftPacket, sent_packages:seq<RaftPacket>)
-  requires received_packet.msg.RaftMessage_AppendEntriesReply?
-{
-  var received_msg := received_packet.msg;
-  && WellFormedLRaftServer(s)
-  && WellFormedLRaftServer(s')
-  // maybe step down
-  && RaftServerMaybeStepDown(s, s', received_packet.msg.term)
-  // only leader handles this
-  && (
-    var sender := received_packet.src;
-    var index := received_msg.match_index;
-    if s.role.Leader? && s.current_term == received_msg.term then
-      // handle this reply
-      if received_msg.success == true then
-        && s'.match_index == s.match_index[sender := index]
-        && s'.next_index == s.next_index[sender := index + 1]
-        // if quorum replicated, commit
-        && s'.commit_index == max(s.commit_index, index)
-        && forall i :: s.commit_index < i <= RaftLastLogIndex(s') ==> (
-          && 0 <= i < |s'.log|
-          && s'.log[i].is_commited == true
-          && s'.num_replicated[i] >= RaftMinQuorumSize(s.config.global_config)
-        )
-        && s' == s.(match_index := s'.match_index, next_index := s'.next_index)
-      else
-        && sender in s.next_index
-        && s' == s.(next_index := s.next_index[sender := s.next_index[sender] - 1])
-        && |sent_packages| == 1
-        && var sent_msg := sent_packages[0].msg;
-          && sent_msg.RaftMessage_AppendEntries?
-          && RaftServerSentAppendEntries(s, sender, sent_packages[0])
-          && sent_msg.term == s'.current_term
-          && sent_msg.prev_log_index == s.next_index[sender] - 1
-          && 0 <= sent_msg.prev_log_index <= |s'.log|
-          && (
-            if sent_msg.prev_log_index == 0 then
-              sent_msg.prev_log_term == 0
-            else
-              sent_msg.prev_log_term == RaftGetLogEntry(s, sent_msg.prev_log_index).term
-          )
-          && sent_msg.leader_commit == s'.commit_index
-          && sent_msg.entries == []
-    else
-      s' == s.(role := s'.role, voted_for := s'.voted_for, current_term := s'.current_term)
-  )
-  // nothing needs to be sent
-  && |sent_packages| == 0
+  var global_config := s.config.global_config;
+  var params := global_config.params;
   
+  && (
+    if clock >= s.next_heartbeat_time then
+      && UpperBoundedAddition(clock, params.heartbeat_timeout, params.max_integer_value) == s'.next_heartbeat_time
+      && forall packet :: packet in sent_packets ==> packet.msg.RaftMessage_AppendEntries?
+      // // TODO: may need to specify more things
+      && forall ep :: ep in global_config.server_eps && ep != s.config.server_ep ==> (exists p :: p in sent_packets && p.dst == ep)
+    else
+      true
+  )
+
 }
 
-predicate RaftServerNextHandleRequestVote(s:RaftServer, s':RaftServer, received_packet: RaftPacket, sent_packages:seq<RaftPacket>)
-  requires received_packet.msg.RaftMessage_RequestVote?
+predicate RaftServerNextReadClock_NonLeader(s:RaftServer, s':RaftServer, clock:int, sent_packets:seq<RaftPacket>)
 {
-  // maybe step down
-  && RaftServerMaybeStepDown(s, s', received_packet.msg.term)
+  var global_config := s.config.global_config;
+  var params := global_config.params;
+
+  && s == s'.(next_election_time := s'.next_election_time)
+  && (
+    if clock >= s.next_election_time then
+      // becomes candidate and starts election
+      && s'.role == Candidate
+      && params.min_election_timeout <= s'.next_election_time - clock <= params.max_election_timeout
+      && forall packet :: packet in sent_packets ==> packet.msg.RaftMessage_RequestVote?
+      // TODO: may need to specify more things
+      && forall ep :: ep in global_config.server_eps ==> (exists p :: p in sent_packets && p.dst == ep)
+    else
+      true
+  )
 }
 
-predicate RaftServerNextHandleRequestVoteReply(s:RaftServer, s':RaftServer, received_packet: RaftPacket, sent_packages:seq<RaftPacket>)
-  requires received_packet.msg.RaftMessage_RequestVoteReply?
+predicate RaftServerNextReadClock(s:RaftServer, s':RaftServer, ios:seq<RaftIo>)
 {
-  // maybe step down
-  && RaftServerMaybeStepDown(s, s', received_packet.msg.term)
+  // for reseting timeout
+  var sent_packets := ExtractSentPacketsFromIos(ios);
+
+  && SpontaneousIos(ios, 1)
+  && (
+    if (s.role == Leader) then
+      && RaftServerNextReadClock_Leader(s, s', SpontaneousClock(ios), sent_packets)
+    else
+      && RaftServerNextReadClock_NonLeader(s, s', SpontaneousClock(ios), sent_packets)
+  )
 }
 
-predicate RaftServerNextReadClockAndProcessPacket(s:RaftServer, s':RaftServer, ios:seq<RaftIo>)
-  requires |ios| >= 1
-  requires ios[0].LIoOpReceive?
-  requires ios[0].r.msg.RaftMessage_AppendEntries?
+function CountGreaterOrEqual(eps:seq<EndPoint>, numbers:map<EndPoint, int>, threshold:int) : int
+  requires (forall ep :: ep in eps ==> ep in numbers)
 {
-  && |ios| > 1
-  && ios[1].LIoOpReadClock?
-  && (forall io :: io in ios[2..] ==> io.LIoOpSend?)
-  && forall entry :: entry in ios[0].r.msg.entries ==> LogEntryValid(entry)
-  && RaftServerNextHandleAppendEntries(s, s', ios[0].r, ios[1].t, ExtractSentPacketsFromIos(ios))
-}
-
-predicate RaftServerNextHandleRequest(s:RaftServer, s':RaftServer, received_packet:RaftPacket, sent_packets:seq<RaftPacket>)
-  requires received_packet.msg.RaftMessage_Request?
-{
-  if |received_packet.msg.req| > MaxAppRequestSize() then
-    && sent_packets == []
-    && s' == s
+  if |eps| == 0 then
+    0
+  else if numbers[eps[0]] >= threshold then
+    1 + CountGreaterOrEqual(eps[1..], numbers, threshold)
   else
-    // TODO
-    && sent_packets == []
-    && s' == s
+    CountGreaterOrEqual(eps[1..], numbers, threshold)
 }
 
-predicate RaftServerNextHandleReply(s:RaftServer, s':RaftServer, received_packet:RaftPacket, sent_packets:seq<RaftPacket>)
-  requires received_packet.msg.RaftMessage_Reply?
+predicate RaftServerNextProcessAppendEntries(s:RaftServer, s':RaftServer, raft_packet:RaftPacket, clock:int, sent_packets:seq<RaftPacket>)
+  // TODO: shall this be general?
+  requires raft_packet.msg.RaftMessage_AppendEntries?
 {
-  && sent_packets == []
-  && s' == s
+  var received_packet := raft_packet;
+  var received_msg := received_packet.msg;
+  var ep := received_packet.src;
+  true
+  // && |s.log| >= 1
+  // && s.config == s'.config
+  // && forall packet :: packet in sent_packets ==> packet.msg.RaftMessage_AppendEntries?
+  // && (
+  //   if (s.current_term < received_msg.term) then
+  //     && s'.current_term == received_msg.term
+  //     && s'.voted_for == None()
+  //     && s'.role == Follower
+  //   else
+  //     true
+  // )
+  // && |sent_packets| == 1
+  // && sent_packets[0].msg.RaftMessage_AppendEntriesReply?
+  // && (
+  //   if (s'.current_term == received_msg.term) then
+  //     var my_log_at_prev_log_index := if 0 <= received_msg.prev_log_index <= |s.log| - 1 then Some(s.log[received_msg.prev_log_index]) else None;
+  //     var my_last_log := s.log[|s.log|-1];
+  //     // current_leader is updated
+  //     && s'.role == Follower
+  //     && s'.current_leader.Some?
+  //     && 0 <= s'.current_leader.v < |s'.config.global_config.server_eps|
+  //     && s'.config.global_config.server_eps[s'.current_leader.v] == received_packet.src
+  //     // entry (if any) is appended
+  //     && clock + s'.config.global_config.params.min_election_timeout <= s'.next_election_time <= clock + s'.config.global_config.params.max_election_timeout
+  //     // proper reply is sent
+  //     && (
+  //       if (
+  //         || received_msg.prev_log_index == 0 
+  //         || (received_msg.prev_log_index <= my_last_log.index && my_log_at_prev_log_index.Some? && received_msg.prev_log_term == my_log_at_prev_log_index.v.term)
+  //       ) then
+  //         && sent_packets[0].msg.success == true
+  //         && sent_packets[0].msg.match_index == (if |received_msg.entries| == 0 then received_msg.prev_log_index else received_msg.entries[|received_msg.entries|-1].index)
+  //         && s'.log == (if |received_msg.entries| == 0 then s.log else s.log[..received_msg.prev_log_index] + received_msg.entries)
+  //         && s'.commit_index == if received_msg.leader_commit > s.commit_index then received_msg.leader_commit else s.commit_index
+  //       else
+  //         && sent_packets[0].msg.success == false
+  //     )
+  //   else
+  //     && sent_packets[0].msg.success == false
+  // )
 }
 
-predicate RaftServerNextProcessPacketWithoutReadingClock(s:RaftServer, s':RaftServer, ios:seq<RaftIo>)
-  requires |ios| >= 1
+
+predicate RaftServerNextProcessAppendEntriesReply(s:RaftServer, s':RaftServer, received_packet:RaftPacket, ios:seq<RaftIo>)
+  requires |ios| >= 2
   requires ios[0].LIoOpReceive?
-  requires !ios[0].r.msg.RaftMessage_AppendEntries?
+  requires ios[1].LIoOpReadClock?
+  requires ios[0].r == received_packet
+  requires ios[0].r.msg.RaftMessage_AppendEntriesReply?
 {
-  && forall io :: io in ios[1..] ==> io.LIoOpSend?
-  && var sent_packets := ExtractSentPacketsFromIos(ios);
-    match ios[0].r.msg
-      case RaftMessage_Invalid() => false
-      case RaftMessage_RequestVote(_,_,_,_) => RaftServerNextHandleRequestVote(s, s', ios[0].r, sent_packets)
-      case RaftMessage_RequestVoteReply(_,_) => RaftServerNextHandleRequestVoteReply(s, s', ios[0].r, sent_packets)
-      case RaftMessage_AppendEntriesReply(_,_,_) => RaftServerNextHandleAppendEntriesReply(s, s', ios[0].r, sent_packets)
-      case RaftMessage_Request(_,_) => RaftServerNextHandleRequest(s, s', ios[0].r, sent_packets)
-      case RaftMessage_Reply(_,_,_,_) => RaftServerNextHandleReply(s, s', ios[0].r, sent_packets)
+  var received_msg := received_packet.msg;
+  var clock := SpontaneousClock(ios);
+  var sent_packets := ExtractSentPacketsFromIos(ios);
+  var ep := received_packet.src;
+  && forall packet :: packet in sent_packets ==> packet.msg.RaftMessage_AppendEntries?
+  && (
+    if (s.current_term < received_msg.term) then
+      && s'.current_term == received_msg.term
+      && s'.voted_for == None()
+      && s'.role == Follower
+    else
+      true
+  )
+  && (
+    if s'.role == Leader && s'.current_term == received_msg.term then
+      if received_msg.success == true then
+        && ep in s.match_index
+        && (
+          if received_msg.match_index > s.match_index[ep] then
+            && s'.match_index == s.match_index[ep := received_msg.match_index]
+          else
+            && s'.match_index == s.match_index
+        )
+        && s'.next_index == s.match_index[ep := s.match_index[ep] + 1]
+        && (forall ep :: ep in s'.config.global_config.server_eps ==> ep in s'.match_index)
+        && (forall i :: s.commit_index < i <= s'.commit_index ==> 
+          CountGreaterOrEqual(s'.config.global_config.server_eps, s'.match_index, i) >= RaftMinQuorumSize(s'.config.global_config)
+        )
+      else
+        && ep in s.next_index
+        && ep in s.match_index
+        && ep in s'.next_index
+        && ep in s'.match_index
+        && s'.match_index == s'.match_index[ep := 0]
+        && (s.next_index[ep] == 1 || s'.next_index[ep] <= s.next_index[ep])
+    else
+      true
+  )
+
 }
 
 predicate RaftServerNextProcessPacket(s:RaftServer, s':RaftServer, ios:seq<RaftIo>)
 {
   && |ios| >= 1
-  && if ios[0].LIoOpTimeoutReceive? then
-      s' == s && |ios| == 1 // TODO: why? (maybe due to implmentation)
-    else
-      (
-        && ios[0].LIoOpReceive?
-        && if ios[0].r.msg.RaftMessage_AppendEntries? then
-            RaftServerNextReadClockAndProcessPacket(s, s', ios)
-          else
-            RaftServerNextProcessPacketWithoutReadingClock(s, s', ios)
-      )
-}
-
-////////////////////////////////////////////////
-// Handle other events
-////////////////////////////////////////////////
-predicate RaftServerNextReadClockMaybeSendHeartbeat(s:RaftServer, s':RaftServer, clock:ClockReading, sent_packets:seq<RaftPacket>)
-{
-  && s.role.Leader?
+  && ios[0].LIoOpReceive?
   && (
-    if clock.t < s.next_heartbeat_time then
-      s' == s && sent_packets == []
-    else
-      && s'.next_heartbeat_time == UpperBoundedAddition(clock.t, s.config.global_config.params.heartbeat_timeout, s.config.global_config.params.max_integer_value)
-      && RaftBroadcastToEveryone(
-        s.config.global_config, s.config.server_ep, 
-        RaftMessage_AppendEntries(
-          s.current_term, s.config.server_ep, 
-          RaftLastLogIndex(s), RaftLastLogTerm(s), 
-          [], s.commit_index),
-        sent_packets)
-      && s' == s.(next_heartbeat_time := s'.next_heartbeat_time)
+    var sent_packets := ExtractSentPacketsFromIos(ios);
+    var potential_clock := SpontaneousClock(ios);
+    match ios[0].r.msg
+      case RaftMessage_Invalid() => (s == s' && sent_packets == [])
+      case RaftMessage_RequestVote(_,_,_,_) => (s == s' && sent_packets == [])
+      case RaftMessage_RequestVoteReply(_,_) => (s == s' && sent_packets == [])
+      // case RaftMessage_AppendEntries(_,_,_,_,_,_) => RaftServerNextProcessAppendEntries(s, s', ios[0].r, potential_clock, sent_packets)
+      case RaftMessage_AppendEntries(_,_,_,_,_,_) => (s == s' && sent_packets == [])
+      case RaftMessage_AppendEntriesReply(_,_,_) => (s == s' && sent_packets == [])
+      case RaftMessage_Request(_,_) => (s == s' && sent_packets == [])
+      case RaftMessage_Reply(_,_,_,_) => (s == s' && sent_packets == [])
   )
 }
 
-predicate RaftServerNextReadClockMaybeStartElection(s:RaftServer, s':RaftServer, clock:ClockReading, sent_packets:seq<RaftPacket>)
-{
-  && (s.role.Follower? || s.role.Candidate?)
-  && (
-    if clock.t < s.next_election_time then
-      s' == s && sent_packets == []
-    else
-      && s'.next_election_time == UpperBoundedAddition(clock.t, s.config.global_config.params.heartbeat_timeout, s.config.global_config.params.max_integer_value)
-      && RaftBroadcastToEveryone(
-        s.config.global_config, s.config.server_ep, 
-        RaftMessage_RequestVote(
-          s.current_term, s.config.server_id, 
-          RaftLastLogIndex(s), RaftLastLogTerm(s)),
-        sent_packets)
-      && s' == s.(next_election_time := s'.next_election_time)
-  )
-}
 
-predicate RaftServerNoReceiveNext(s:RaftServer, nextActionIndex:int, s':RaftServer, ios:seq<RaftIo>)
+predicate RaftServerNextCommitAndApply(s:RaftServer, s':RaftServer, ios:seq<RaftIo>)
 {
   var sent_packets := ExtractSentPacketsFromIos(ios);
-
-  if nextActionIndex == 1 then
-    if s.role.Leader? then
-      // leader may timeout for heartbeat
-      && SpontaneousIos(ios, 1)
-      && RaftServerNextReadClockMaybeSendHeartbeat(s, s', SpontaneousClock(ios), sent_packets)
-    else if s.role.Follower? then
-      // follower may timeout for election
-      && SpontaneousIos(ios, 1)
-      && RaftServerNextReadClockMaybeStartElection(s, s', SpontaneousClock(ios), sent_packets)
-    else
-      //candidate may timeout for election
-      && s.role.Candidate?
-      && SpontaneousIos(ios, 1)
-      && RaftServerNextReadClockMaybeStartElection(s, s', SpontaneousClock(ios), sent_packets)
-  else
-    false
+  && |sent_packets| <= 1
+  // && (
+  //   if |sent_packets| > 0 then
+  //     true
+  //     // && |sent_packets| == 1
+  //     // && s.last_applied < s.commit_index
+  //     // && s'.last_applied == s.last_applied + 1
+  //     // && sent_packets[0].msg.RaftMessage_Reply?
+  //   else
+  //     true
+  // )
 }
 
-function method RaftServerNumActions() : int
-{
-  3
-}
 
 }

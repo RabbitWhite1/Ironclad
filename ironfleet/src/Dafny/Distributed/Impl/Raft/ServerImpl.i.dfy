@@ -14,6 +14,7 @@ include "AppInterface.i.dfy"
 include "CMessage.i.dfy"
 include "Config.i.dfy"
 include "CTypes.i.dfy"
+include "NetRaft.i.dfy"
 include "PacketParsing.i.dfy"
 
 
@@ -34,69 +35,63 @@ import opened Raft__AppInterface_i
 import opened Raft__CMessage_i
 import opened Raft__ConfigState_i
 import opened Raft__CTypes_i
+import opened Raft__NetRaft_i
 import opened Raft__PacketParsing_i
+
+
+datatype ServerImplState = ServerImplState(
+  config:ServerConfigState,
+  role:RaftRole,
+  // for timeout
+  next_heartbeat_time:uint64,
+  next_election_time:uint64,
+  // persistent state
+  current_leader:Option<uint64>,
+  current_term:uint64,
+  voted_for:Option<uint64>,
+  log:seq<CLogEntry>,
+  // volatile state on all servers
+  commit_index:uint64,
+  last_applied:uint64,
+  // volatile state on leaders
+  next_index:map<EndPoint, uint64>,
+  match_index:map<EndPoint, uint64>,
+  num_replicated:seq<int>, // log index -> num of replicated
+  vote_granted:map<EndPoint, uint64>, // server_id -> voted?(bool)
+
+  random_generator:RandomGenerator,
+
+  app_state:AppStateMachine
+)
 
 class ServerImpl
 {
+  var state:ServerImplState;
   var net_client:NetClient?;
   var local_addr:EndPoint;
   var nextActionIndex:uint64;
 
-  var config:ServerConfigState;
-  var role:RaftRole;
-  // for timeout
-  var next_heartbeat_time:uint64;
-  var next_election_time:uint64;
-  // persistent state
-  var current_leader:Option<uint64>;
-  var current_term:uint64;
-  var voted_for:Option<uint64>;
-  var log:seq<CLogEntry>;
-  // volatile state on all servers
-  var commit_index:uint64;
-  var last_applied:uint64;
-  // volatile state on leaders
-  var next_index:map<EndPoint, uint64>;
-  var match_index:map<EndPoint, uint64>;
-  var num_replicated:seq<int>; // log index -> num of replicated
-  var vote_granted:map<EndPoint, uint64>; // server_id -> voted?(bool)
-
-  var random_generator:RandomGenerator;
-
   var msg_grammar:G;
-
-  var app_state:AppStateMachine;
 
   ghost var repr : set<object>;
 
   constructor() {
     net_client := null;
-    role := Follower;
-    next_heartbeat_time := 0;
-    next_election_time := 0;
-    current_leader := None();
-    current_term := 0;
-    voted_for := None();
-    log := [];
-    commit_index := 0;
-    last_applied := 0;
-    next_index := map[];
-    match_index := map[];
-    num_replicated := [];
-    vote_granted := map[];
-    var app_s := AppStateMachine.Initialize();
-    random_generator := new RandomGenerator(1);
-    app_state := app_s;
+    config := ServerConfigState();
+    state := ServerImplState(
+      
+    )
+    
   }
 
   predicate Valid()
     reads this
-    reads this.app_state
+    reads this.body.app_state
     reads if net_client != null then NetClientIsValid.reads(net_client) else {}
   {
     && (0 <= nextActionIndex as int < RaftServerNumActions())
     && net_client != null
-    && ServerConfigStateIsValid(config)
+    && ServerConfigStateIsValid(body.config)
     && NetClientIsValid(net_client)
     && EndPoint(net_client.MyPublicKey()) == local_addr
     && EndPoint(net_client.MyPublicKey()) == config.server_ep
@@ -163,6 +158,7 @@ class ServerImpl
       MapUint64MapValueToInt(next_index),
       MapUint64MapValueToInt(match_index),
       num_replicated,
+      MapUint64MapValueToInt(vote_granted),
       app_state.Abstractify()
     )
   }
@@ -466,20 +462,17 @@ class ServerImpl
     }
   }
 
-  method PrepareAppendEntriesPacket(ep:EndPoint, is_heartbeat:bool) returns (ok:bool, packet:CPacket)
+  method PrepareAppendEntriesPacket(ep:EndPoint, is_heartbeat:bool) returns (packet:CPacket)
     requires this.role.Leader?
     requires Valid()
     requires ep in config.global_config.server_eps
-    ensures ok ==> (
-      && packet.msg.CMessage_AppendEntries?
-      && packet.dst == ep
-      && packet.src == this.config.server_ep == this.local_addr
-      && CPacketIsSendable(packet)
-      && CPacketIsAbstractable(packet)
-      && this.nextActionIndex == old(this.nextActionIndex)
-    )
+    ensures packet.msg.CMessage_AppendEntries?
+    ensures packet.dst == ep
+    ensures packet.src == this.config.server_ep == this.local_addr
+    ensures CPacketIsSendable(packet)
+    ensures CPacketIsAbstractable(packet)
+    ensures this.nextActionIndex == old(this.nextActionIndex)
   {
-    ok := false;
     var next_index:uint64 := this.next_index[ep];
     var entries;
     // if is_heartbeat {
@@ -514,19 +507,14 @@ class ServerImpl
     var last_log_entry := GetLastLogEntry();
     var ep_id := GetEndPointIndex(this.config.global_config, ep);
     print "To ", ep_id, ": next_index=", next_index, ",last_log_entry.index=", last_log_entry.index, "\n";
-    if next_index <= last_log_entry.index || is_heartbeat {
-      ok := true;
-      packet := CPacket(
-        ep, 
-        leader_ep, 
-        CMessage_AppendEntries(
-          this.current_term, leader_ep, prev_log_index, prev_log_term, entries, this.commit_index
-        )
-      );
-      assert CPacketIsSendable(packet);
-    } else {
-      ok := false;
-    }
+    packet := CPacket(
+      ep, 
+      leader_ep, 
+      CMessage_AppendEntries(
+        this.current_term, leader_ep, prev_log_index, prev_log_term, entries, this.commit_index
+      )
+    );
+    assert CPacketIsSendable(packet);
   }
 
   method VoteRequestPassed() returns (passed:bool)
@@ -549,10 +537,22 @@ class ServerImpl
     passed := count >= CRaftMinQuorumSize(this.config.global_config);
   }
 
+  predicate ReceivedPacketProperties(cpacket:CPacket, netEvent0:NetEvent, io0:RaftIo)
+    reads this
+    requires ServerConfigStateIsValid(config)
+  {
+    && CPacketIsSendable(cpacket)
+    && EndPointIsValidPublicKey(cpacket.src)
+    && io0.LIoOpReceive?
+    && NetEventIsAbstractable(netEvent0)
+    && io0 == AbstractifyNetEventToRaftIo(netEvent0)
+    && netEvent0.LIoOpReceive? && AbstractifyCPacketToRaftPacket(cpacket) == AbstractifyNetPacketToRaftPacket(netEvent0.r)
+  }
+
 } // end of class ServerImpl
 
 
-method Server_CreateAppendEntriesForAll(server_impl:ServerImpl, is_heartbeat:bool) returns (ok:bool, outbound_packets:seq<CPacket>)
+method Server_CreateAppendEntriesForAll(server_impl:ServerImpl, is_heartbeat:bool) returns (outbound_packets:seq<CPacket>)
   requires server_impl.Valid()
   requires server_impl.role.Leader?
   ensures server_impl.Valid()
@@ -564,9 +564,11 @@ method Server_CreateAppendEntriesForAll(server_impl:ServerImpl, is_heartbeat:boo
   ensures server_impl.Env() == old(server_impl.Env())
   ensures server_impl.nextActionIndex == old(server_impl.nextActionIndex)
   ensures server_impl.repr == old(server_impl.repr)
-  ensures ok ==> (
-    && OutboundPacketsIsValid(PacketSequence(outbound_packets))
-  )
+  ensures OutboundPacketsIsValid(PacketSequence(outbound_packets))
+  ensures server_impl.next_heartbeat_time == old(server_impl.next_heartbeat_time)
+  ensures forall packet :: packet in outbound_packets ==> packet.msg.CMessage_AppendEntries?
+  ensures forall i_ :: 0 <= i_ < |server_impl.config.global_config.server_eps| && server_impl.config.global_config.server_eps[i_] != server_impl.config.server_ep ==> 
+      (exists packet :: packet in outbound_packets && packet.dst == server_impl.config.global_config.server_eps[i_])
 {
   outbound_packets := [];
   var i := 0;
@@ -583,14 +585,14 @@ method Server_CreateAppendEntriesForAll(server_impl:ServerImpl, is_heartbeat:boo
     invariant server_impl.Env() == old(server_impl.Env())
     invariant server_impl.nextActionIndex == old(server_impl.nextActionIndex)
     invariant server_impl.repr == old(server_impl.repr)
+    invariant forall packet_ :: packet_ in outbound_packets ==> packet_.msg.CMessage_AppendEntries?
+    invariant forall i_ :: 0 <= i_ < i && server_impl.config.global_config.server_eps[i_] != server_impl.config.server_ep ==> 
+      (exists packet :: packet in outbound_packets && packet.dst == server_impl.config.global_config.server_eps[i_])
   {
     var ep := server_impl.config.global_config.server_eps[i];
     if ep != server_impl.config.server_ep {
       var packet;
-      ok, packet := server_impl.PrepareAppendEntriesPacket(ep, is_heartbeat);
-      if (!ok) {
-        break;
-      }
+      packet := server_impl.PrepareAppendEntriesPacket(ep, is_heartbeat);
       print "ready to send to ", i, " with AppendEntries(", |packet.msg.entries|, ")\n";
       assert CPacketIsSendable(packet);
       outbound_packets := outbound_packets + [packet];
@@ -598,7 +600,6 @@ method Server_CreateAppendEntriesForAll(server_impl:ServerImpl, is_heartbeat:boo
     i := i + 1;
     assert |outbound_packets| <= i;
   }
-  ok := true;
 }
 
 method Server_CreateRequestVoteForAll(server_impl:ServerImpl) returns (ok:bool, outbound_packets:seq<CPacket>)

@@ -31,31 +31,31 @@ import opened Raft__QRelations_i
 import opened Raft__PacketParsing_i
 import opened Raft__ServerImplLemmas_i
 
-method DeliverPacket(r:ServerImpl, packets:OutboundPackets) returns (ok:bool, ghost netEventLog:seq<NetEvent>, ghost ios:seq<RaftIo>)
-  requires r.Valid()
+method DeliverPacket(server_impl:ServerImpl, packets:OutboundPackets) returns (ok:bool, ghost netEventLog:seq<NetEvent>, ghost ios:seq<RaftIo>)
+  requires server_impl.Valid()
   requires packets.OutboundPacket?
   requires OutboundPacketsIsValid(packets)
-  requires OutboundPacketsHasCorrectSrc(packets, r.config.server_ep)
-  modifies r.repr
-  ensures r.repr == old(r.repr)
-  ensures r.net_client != null
-  ensures ok == NetClientOk(r.net_client)
-  ensures r.Env() == old(r.Env())
+  requires OutboundPacketsHasCorrectSrc(packets, server_impl.config.server_ep)
+  modifies server_impl.repr
+  ensures server_impl.repr == old(server_impl.repr)
+  ensures server_impl.net_client != null
+  ensures ok == NetClientOk(server_impl.net_client)
+  ensures server_impl.Env() == old(server_impl.Env())
   // TOPROVE
-  // ensures r.replica == old(r.replica)
+  // ensures server_impl.replica == old(server_impl.replica)
   ensures ok ==>
-          && r.Valid()
-          && r.nextActionIndex == old(r.nextActionIndex)
+          && server_impl.Valid()
+          && server_impl.nextActionIndex == old(server_impl.nextActionIndex)
           && AllIosAreSends(ios)
           && AbstractifyOutboundCPacketsToSeqOfRaftPackets(packets) == ExtractSentPacketsFromIos(ios)
           && OnlySentMarshallableData(netEventLog)
           && RawIoConsistentWithSpecIO(netEventLog, ios)
-          && old(r.Env().net.history()) + netEventLog == r.Env().net.history()
+          && old(server_impl.Env().net.history()) + netEventLog == server_impl.Env().net.history()
           && forall i::0<=i<|netEventLog| ==> AbstractifyNetEventToRaftIo(netEventLog[i]) == ios[i]
           && forall i::0<=i<|netEventLog| ==> netEventLog[i].LIoOpSend? && ios[i].LIoOpSend?;
 {
   var start_time := Time.GetDebugTimeTicks();
-  ok, netEventLog := SendPacket(r.net_client, packets, r.local_addr);
+  ok, netEventLog := SendPacket(server_impl.net_client, packets, server_impl.local_addr);
   if (!ok) { return; }
 
   ios := MapSentPacketToIos(packets.p);
@@ -68,30 +68,30 @@ method DeliverPacket(r:ServerImpl, packets:OutboundPackets) returns (ok:bool, gh
   } 
 }
 
-method {:timeLimitMultiplier 2} DeliverPacketSequence(r:ServerImpl, packets:OutboundPackets) returns (ok:bool, ghost netEventLog:seq<NetEvent>, ghost ios:seq<RaftIo>)
-  requires r.Valid()
+method {:timeLimitMultiplier 2} DeliverPacketSequence(server_impl:ServerImpl, packets:OutboundPackets) returns (ok:bool, ghost netEventLog:seq<NetEvent>, ghost ios:seq<RaftIo>)
+  requires server_impl.Valid()
   requires packets.PacketSequence?
   requires OutboundPacketsIsValid(packets)
   requires OutboundPacketsIsAbstractable(packets)
-  requires OutboundPacketsHasCorrectSrc(packets, r.config.server_ep)
-  modifies r.repr
-  ensures r.repr == old(r.repr)
-  ensures r.net_client != null
-  ensures ok == NetClientOk(r.net_client)
-  ensures r.Env() == old(r.Env())
+  requires OutboundPacketsHasCorrectSrc(packets, server_impl.config.server_ep)
+  modifies server_impl.repr
+  ensures server_impl.repr == old(server_impl.repr)
+  ensures server_impl.net_client != null
+  ensures ok == NetClientOk(server_impl.net_client)
+  ensures server_impl.Env() == old(server_impl.Env())
   // TOPROVE
-  // ensures r.replica == old(r.replica)
+  // ensures server_impl.replica == old(server_impl.replica)
   ensures ok ==>
-          && r.Valid()
-          && r.nextActionIndex == old(r.nextActionIndex)
+          && server_impl.Valid()
+          && server_impl.nextActionIndex == old(server_impl.nextActionIndex)
           && AllIosAreSends(ios)
           && AbstractifyOutboundCPacketsToSeqOfRaftPackets(packets) == ExtractSentPacketsFromIos(ios)
           && OnlySentMarshallableData(netEventLog)
           && RawIoConsistentWithSpecIO(netEventLog, ios)
-          && old(r.Env().net.history()) + netEventLog == r.Env().net.history()
+          && old(server_impl.Env().net.history()) + netEventLog == server_impl.Env().net.history()
 {
   var start_time := Time.GetDebugTimeTicks();
-  ok, netEventLog := SendPacketSequence(r.net_client, packets, r.local_addr);
+  ok, netEventLog := SendPacketSequence(server_impl.net_client, packets, server_impl.local_addr);
   if (!ok) { return; }
 
   ios := MapSentPacketSeqToIos(packets.s);
@@ -100,28 +100,28 @@ method {:timeLimitMultiplier 2} DeliverPacketSequence(r:ServerImpl, packets:Outb
   RecordTimingSeq("DeliverPacketSequence", start_time, end_time);
 }
 
-method{:timeLimitMultiplier 2} DeliverBroadcast(r:ServerImpl, broadcast:CBroadcast) returns (ok:bool, ghost netEventLog:seq<NetEvent>, ghost ios:seq<RaftIo>)
-  requires r.Valid()
+method{:timeLimitMultiplier 2} DeliverBroadcast(server_impl:ServerImpl, broadcast:CBroadcast) returns (ok:bool, ghost netEventLog:seq<NetEvent>, ghost ios:seq<RaftIo>)
+  requires server_impl.Valid()
   requires CBroadcastIsValid(broadcast)
-  requires broadcast.CBroadcast? ==> broadcast.src == r.config.server_ep;
-  modifies r.repr
-  ensures r.repr == old(r.repr)
-  ensures r.net_client != null
-  ensures ok == NetClientOk(r.net_client)
-  ensures r.Env() == old(r.Env())
+  requires broadcast.CBroadcast? ==> broadcast.src == server_impl.config.server_ep;
+  modifies server_impl.repr
+  ensures server_impl.repr == old(server_impl.repr)
+  ensures server_impl.net_client != null
+  ensures ok == NetClientOk(server_impl.net_client)
+  ensures server_impl.Env() == old(server_impl.Env())
   // TOPROVE
-  // ensures r.replica == old(r.replica)
+  // ensures server_impl.replica == old(server_impl.replica)
   ensures ok ==>
-          && r.Valid()
-          && r.nextActionIndex == old(r.nextActionIndex)
+          && server_impl.Valid()
+          && server_impl.nextActionIndex == old(server_impl.nextActionIndex)
           && AllIosAreSends(ios)
           // && AbstractifyCBroadcastToRaftPacketSeq(broadcast) == ExtractSentPacketsFromIos(ios)
           && OnlySentMarshallableData(netEventLog)
           && RawIoConsistentWithSpecIO(netEventLog, ios)
-          && old(r.Env().net.history()) + netEventLog == r.Env().net.history()
+          && old(server_impl.Env().net.history()) + netEventLog == server_impl.Env().net.history()
 {
   var start_time := Time.GetDebugTimeTicks();
-  ok, netEventLog := SendBroadcast(r.net_client, broadcast, r.local_addr);
+  ok, netEventLog := SendBroadcast(server_impl.net_client, broadcast, server_impl.local_addr);
   if (!ok) { return; }
 
   ios := MapBroadcastToIos(broadcast);
@@ -193,31 +193,31 @@ method{:timeLimitMultiplier 2} DeliverBroadcast(r:ServerImpl, broadcast:CBroadca
   }
 }
 
-method DeliverOutboundPackets(r:ServerImpl, packets:OutboundPackets) returns (ok:bool, ghost netEventLog:seq<NetEvent>, ghost ios:seq<RaftIo>)
-  requires r.Valid()
+method DeliverOutboundPackets(server_impl:ServerImpl, packets:OutboundPackets) returns (ok:bool, ghost netEventLog:seq<NetEvent>, ghost ios:seq<RaftIo>)
+  requires server_impl.Valid()
   requires OutboundPacketsIsValid(packets)
   requires OutboundPacketsIsAbstractable(packets)
-  requires OutboundPacketsHasCorrectSrc(packets, r.config.server_ep);
-  modifies r.repr
-  ensures r.repr == old(r.repr)
-  ensures r.net_client != null
-  ensures ok == NetClientOk(r.net_client)
-  ensures r.Env() == old(r.Env())
-  // ensures r.replica == old(r.replica)
+  requires OutboundPacketsHasCorrectSrc(packets, server_impl.config.server_ep);
+  modifies server_impl.repr
+  ensures server_impl.repr == old(server_impl.repr)
+  ensures server_impl.net_client != null
+  ensures ok == NetClientOk(server_impl.net_client)
+  ensures server_impl.Env() == old(server_impl.Env())
+  ensures server_impl == old(server_impl)
   ensures ok ==>
-            && r.Valid()
-            && r.nextActionIndex == old(r.nextActionIndex)
+            && server_impl.Valid()
+            && server_impl.nextActionIndex == old(server_impl.nextActionIndex)
             && AllIosAreSends(ios)
-            // && AbstractifyOutboundCPacketsToSeqOfRaftPackets(packets) == ExtractSentPacketsFromIos(ios)
+            && AbstractifyOutboundCPacketsToSeqOfRaftPackets(packets) == ExtractSentPacketsFromIos(ios)
             && OnlySentMarshallableData(netEventLog)
             && RawIoConsistentWithSpecIO(netEventLog, ios)
             && OnlySentMarshallableData(netEventLog)
-            && old(r.Env().net.history()) + netEventLog == r.Env().net.history()
+            && old(server_impl.Env().net.history()) + netEventLog == server_impl.Env().net.history()
 {
   match packets {
-    case Broadcast(broadcast) => ok, netEventLog, ios := DeliverBroadcast(r, broadcast);
-    case OutboundPacket(p) => ok, netEventLog, ios := DeliverPacket(r, packets);
-    case PacketSequence(s) => ok, netEventLog, ios := DeliverPacketSequence(r, packets);
+    case Broadcast(broadcast) => ok, netEventLog, ios := DeliverBroadcast(server_impl, broadcast);
+    case OutboundPacket(p) => ok, netEventLog, ios := DeliverPacket(server_impl, packets);
+    case PacketSequence(s) => ok, netEventLog, ios := DeliverPacketSequence(server_impl, packets);
   }
 }
 

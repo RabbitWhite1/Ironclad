@@ -23,10 +23,14 @@ predicate RaftServerSchedulerInit(sch:RaftServerScheduler, c:RaftServerConfig)
 predicate RaftServerSchedulerNext(sch:RaftServerScheduler, sch':RaftServerScheduler, ios:seq<RaftIo>) 
 {
   && sch'.nextActionIndex == (sch.nextActionIndex + 1) % RaftServerNumActions()
-  && if sch.nextActionIndex == 0 then
+  && (
+    if sch.nextActionIndex == 0 then
       RaftServerNextProcessPacket(sch.server, sch'.server, ios)
+    else if sch.nextActionIndex == 1 then
+      RaftServerNextReadClock(sch.server, sch'.server, ios)
     else
-      RaftServerNoReceiveNext(sch.server, sch.nextActionIndex, sch'.server, ios)
-
+      && sch.nextActionIndex == 2
+      && RaftServerNextCommitAndApply(sch.server, sch'.server, ios)
+  )
 }
 }

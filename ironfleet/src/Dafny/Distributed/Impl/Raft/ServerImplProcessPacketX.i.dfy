@@ -107,11 +107,7 @@ method Server_Next_ProcessRequest(server_impl:ServerImpl, ghost old_net_history:
     print "append success!!!\n";
     // Create packets
     var outbound_packets:seq<CPacket> := [];
-    ok, outbound_packets := Server_CreateAppendEntriesForAll(server_impl, false);
-    if (!ok) {
-      ok := true;
-      return;
-    }
+    outbound_packets := Server_CreateAppendEntriesForAll(server_impl, false);
     assert |outbound_packets| <= |server_impl.config.global_config.server_eps| <= 0xFFFF_FFFF_FFFF_FFFF;
     assert (forall p :: p in outbound_packets ==> CPacketIsSendable(p));
     ok, log_tail, ios_tail := DeliverOutboundPackets(server_impl, PacketSequence(outbound_packets));
@@ -244,7 +240,7 @@ method Server_HandleAppendEntries_TryToAppendAndSend(server_impl:ServerImpl, gho
       match_index := msg.prev_log_index;
     } else {
       server_impl.log := server_impl.log[..msg.prev_log_index+1] + msg.entries;
-      match_index := my_last_log.index;
+      match_index := msg.entries[|msg.entries|-1].index;
     }
     if (msg.leader_commit > server_impl.commit_index) {
       server_impl.commit_index := msg.leader_commit;
@@ -265,13 +261,14 @@ method Server_HandleAppendEntries_TryToAppendAndSend(server_impl:ServerImpl, gho
   assert forall i :: 0 <= i < |net_event_log| - 1 ==> net_event_log[i].LIoOpReceive? || net_event_log[i+1].LIoOpSend?;
 }
 
-method Server_HandleAppendEntries(server_impl:ServerImpl, ghost old_net_history:seq<NetEvent>, rr:ReceiveResult, ghost receive_event:NetEvent) 
+method Server_HandleAppendEntries(server_impl:ServerImpl, rr:ReceiveResult, ghost old_net_history:seq<NetEvent>, ghost receive_event:NetEvent, ghost receive_io:RaftIo) 
   returns (ok:bool, ghost net_event_log:seq<NetEvent>, ghost ios:seq<RaftIo>)
   // About recved things
   requires receive_event.LIoOpReceive?
   requires rr.RRPacket?
   requires NetPacketIsAbstractable(receive_event.r)
   requires rr.cpacket.msg.CMessage_AppendEntries?
+  // requires server_impl.ReceivedPacketProperties(rr.cpacket, receive_event, receive_io)
   // About server
   requires server_impl.Valid()
   requires server_impl.Env().net.history() == old_net_history + [receive_event]
@@ -285,10 +282,12 @@ method Server_HandleAppendEntries(server_impl:ServerImpl, ghost old_net_history:
   ensures ok ==> 
             && server_impl.Valid()
             && server_impl.nextActionIndex == old(server_impl.nextActionIndex)
-            // PROVE
-            // && (|| Q_RaftServer_Next_ProcessPacket(old(server_impl.AbstractifyToRaftServer()), server_impl.AbstractifyToRaftServer(), ios)
-            //     || (&& IosReflectIgnoringUnsendable(net_event_log)
-            //        && old(server_impl.AbstractifyToRaftServer()) == server_impl.AbstractifyToRaftServer()))
+            // TOPROVE
+            // && (
+            //   || Q_RaftServer_Next_ProcessPacket(old(server_impl.AbstractifyToRaftServer()), server_impl.AbstractifyToRaftServer(), ios)
+            //   || rr.cpacket.src !in server_impl.config.global_config.server_eps
+            //   || (|ios| == 1 && ios[0].LIoOpReceive?)
+            // )
             && RawIoConsistentWithSpecIO(net_event_log, ios)
             && OnlySentMarshallableData(net_event_log)
             && old_net_history + net_event_log == server_impl.Env().net.history()
@@ -334,57 +333,16 @@ method Server_HandleAppendEntries(server_impl:ServerImpl, ghost old_net_history:
     ghost var ios_2:seq<RaftIo> := [];
     var old_net_history_2 := server_impl.Env().net.history();
     ok, net_event_log_2, ios_2 := Server_HandleAppendEntries_TryToAppendAndSend(server_impl, old_net_history_2, rr);
-    // net_event_log_2 := [];
-    // ios_2 := [];
-    // ok := true;
     if (!ok) { return; }
     net_event_log := net_event_log + net_event_log_2;
     ios := ios + ios_2;
     assert forall i::0<=i<|net_event_log_2| ==> AbstractifyNetEventToRaftIo(net_event_log_2[i]) == ios_2[i];
     assert forall i::0<=i<|net_event_log_2| ==> net_event_log_2[i].LIoOpSend? && ios_2[i].LIoOpSend?;
     assert forall i :: 0 <= i < |net_event_log| - 1 ==> net_event_log[i].LIoOpReceive? || net_event_log[i+1].LIoOpSend?;
-    
-    // check whether we can put the entries
-    // if msg.prev_log_index > 0xFFFF_FFFF_FFFF_FFFE 
-    //   && (msg.prev_log_index as int + 1 + |msg.entries| > ServerMaxLogSize())
-    // {
-    //   ok := true;
-    //   print "[Error] msg.prev_log_index too large";
-    //   return;
-    // }
-    // var my_log_at_prev_log_index := None;
-    // if (msg.prev_log_index <= my_last_log.index) {
-    //   my_log_at_prev_log_index := server_impl.GetLogEntry(msg.prev_log_index);
-    //   // TOPROVE: my_log_at_prev_log_index is not None
-    // }
-    // if (msg.prev_log_index == 0 
-    //   || (msg.prev_log_index <= my_last_log.index && my_log_at_prev_log_index.Some? && msg.prev_log_term == my_log_at_prev_log_index.v.term)
-    // ) {
-    //   success := 1;
-    //   assert |msg.entries| > 0 ==> server_impl.log[msg.prev_log_index].index as int + 1 == msg.entries[0].index as int;
-    //   if |msg.entries| == 0 {
-    //     match_index := msg.prev_log_index;
-    //   } else {
-    //     server_impl.log := server_impl.log[..msg.prev_log_index+1] + msg.entries;
-    //     match_index := my_last_log.index;
-    //   }
-    //   if (msg.leader_commit > server_impl.commit_index) {
-    //     server_impl.commit_index := msg.leader_commit;
-    //   }
-    //   print "After appending, |log|=", |server_impl.log|, "\n";
-    // } else {
-    //   print "Not yet uptodate, cannot append\n";
-    // }
-    // var send_msg := CMessage_AppendEntriesReply(server_impl.current_term, success, match_index);
-    // var send_packet := CPacket(rr.cpacket.src, server_impl.config.server_ep, send_msg);
-    // ghost var log_tail, ios_tail;
-    // ok, log_tail, ios_tail := DeliverOutboundPackets(server_impl, OutboundPacket(Some(send_packet)));
-    // if (!ok) { return; }
-    // net_event_log := net_event_log + log_tail;
-    // ios := ios + ios_tail;
-    // assert forall i::0<=i<|log_tail| ==> AbstractifyNetEventToRaftIo(log_tail[i]) == ios_tail[i];
-    // assert forall i::0<=i<|log_tail| ==> log_tail[i].LIoOpSend? && ios_tail[i].LIoOpSend?;
-    // assert forall i :: 0 <= i < |net_event_log| - 1 ==> net_event_log[i].LIoOpReceive? || net_event_log[i+1].LIoOpSend?;
+    var raft_server := old(server_impl.AbstractifyToRaftServer());
+    var raft_server' := server_impl.AbstractifyToRaftServer();
+    var raft_packet := AbstractifyCPacketToRaftPacket(rr.cpacket);
+    assert raft_packet.msg.RaftMessage_AppendEntries?;
   } else {
     net_event_log := [receive_event];
     ios := [receive_io];
@@ -632,12 +590,7 @@ method Server_HandleReqeustVoteReply(server_impl:ServerImpl, ghost old_net_histo
       server_impl.BecomeLeader();
       // Create packets
       var outbound_packets:seq<CPacket> := [];
-      ok, outbound_packets := Server_CreateAppendEntriesForAll(server_impl, true);
-      if (!ok) {
-        print "prepare AppendEntries failed\n";
-        ok := true;
-        return;
-      }
+      outbound_packets := Server_CreateAppendEntriesForAll(server_impl, true);
       assert |outbound_packets| <= |server_impl.config.global_config.server_eps| <= 0xFFFF_FFFF_FFFF_FFFF;
       assert (forall p :: p in outbound_packets ==> CPacketIsSendable(p));
       ok, log_tail, ios_tail := DeliverOutboundPackets(server_impl, PacketSequence(outbound_packets));
@@ -727,7 +680,7 @@ method Server_Next_ProcessPacketX(server_impl:ServerImpl)
         }
         print "server ", my_idx, "(", server_impl.current_term, ",is_leader=", server_impl.role.Leader?, ",leader=", if server_impl.current_leader.Some? then server_impl.current_leader.v else 0xFFFF_FFFF_FFFF_FFFF, 
           ") received from ", src_id, "AppendEntries(|entries|=", |msg.entries|, ",prev_log_index=", msg.prev_log_index, ")\n";
-        ok, net_event_log, ios := Server_HandleAppendEntries(server_impl, old_net_history, rr, receive_event);
+        ok, net_event_log, ios := Server_HandleAppendEntries(server_impl, rr, old_net_history, receive_event, receive_io);
       } else if (msg.CMessage_AppendEntriesReply?) {
         if (server_impl.role != Leader) {
           return;

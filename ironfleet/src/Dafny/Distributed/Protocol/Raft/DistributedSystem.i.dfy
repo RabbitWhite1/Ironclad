@@ -33,8 +33,9 @@ predicate RaftInit(s:RaftState, c:RaftConfig)
   && WellFormedRaftConfig(c)
   && LEnvironment_Init(s.environment)
   && |s.serverSchedulers| == |c.server_eps|
-  && (forall sch :: sch in s.serverSchedulers ==> RaftServerSchedulerInit(sch, RaftServerConfig(sch.server.config.server_ep, c)))
-  
+  && (forall i :: 0 <= i < |s.serverSchedulers| ==>
+      var sch := s.serverSchedulers[i];
+      RaftServerScheduler_Init(sch, RaftServerConfig(sch.server.config.server_ep, i, c)))
 }
 
 // Protocol-level next
