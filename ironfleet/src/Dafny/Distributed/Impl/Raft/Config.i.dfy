@@ -149,24 +149,19 @@ function AbstractifyConfigStateToRaftConfig(config:ConfigState) : RaftConfig
 }
 
 datatype ServerConfigState = ServerConfigState(
-  server_ep:EndPoint,
   server_id:uint64,
   global_config:ConfigState
 )
 
 predicate ServerConfigStateIsValid(sconfig:ServerConfigState)
 {
-  && EndPointIsValidPublicKey(sconfig.server_ep)
   && 0 <= sconfig.server_id as int < |sconfig.global_config.server_eps|
-  && sconfig.global_config.server_eps[sconfig.server_id] == sconfig.server_ep
   && ConfigStateIsValid(sconfig.global_config)
-  && sconfig.server_ep in sconfig.global_config.server_eps
 }
 
 function AbstractifyServerConfigStateToRaftServerConfig(server_config:ServerConfigState) : RaftServerConfig
 {
   RaftServerConfig(
-    server_config.server_ep,
     server_config.server_id as int,
     AbstractifyConfigStateToRaftConfig(server_config.global_config)
   )
@@ -177,7 +172,8 @@ method InitServerConfigState(my_ep:EndPoint, eps:seq<EndPoint>) returns (sc:Serv
   requires 0 < |eps| < 0x1_0000_0000_0000_0000
   requires forall ep :: ep in eps ==> EndPointIsValidPublicKey(ep)
   requires SeqIsUnique(eps)
-  ensures sc.server_ep == my_ep
+  ensures 0 <= sc.server_id as int < |eps|
+  ensures eps[sc.server_id] == my_ep
   ensures sc.global_config.server_eps == eps
   ensures sc.global_config.params == StaticParams()
   ensures ParamStateIsValid(sc.global_config.params)
@@ -187,7 +183,7 @@ method InitServerConfigState(my_ep:EndPoint, eps:seq<EndPoint>) returns (sc:Serv
   var params := StaticParams(); 
   var global_config := ConfigState(eps, params);
   var ep_id := GetEndPointIndex(global_config, my_ep);
-  sc := ServerConfigState(my_ep, ep_id, global_config);
+  sc := ServerConfigState(ep_id, global_config);
 }
 
 function method RaftEndPointIsValid(endPoint:EndPoint, config:ConfigState) : bool

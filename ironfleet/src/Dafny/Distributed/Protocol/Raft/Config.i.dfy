@@ -29,7 +29,6 @@ datatype RaftConfig = RaftConfig(
 )
 
 datatype RaftServerConfig = RaftServerConfig(
-  server_ep:EndPoint,
   server_id:int,
   global_config:RaftConfig
 )
@@ -62,8 +61,8 @@ function WellFormedRaftConfig(c:RaftConfig) : bool
 
 function WellFormedRaftServerConfig(c:RaftServerConfig) : bool
 {
+  && 0 <= c.server_id < |c.global_config.server_eps|
   && WellFormedRaftConfig(c.global_config)
-  && c.server_ep in c.global_config.server_eps
 }
 
 } 

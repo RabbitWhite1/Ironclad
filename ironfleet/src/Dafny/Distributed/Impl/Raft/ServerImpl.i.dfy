@@ -41,7 +41,7 @@ import opened Raft__PacketParsing_i
 
 datatype ServerImplState = ServerImplState(
   config:ServerConfigState,
-  role:RaftRole,
+  state.role:RaftRole,
   // for timeout
   next_heartbeat_time:uint64,
   next_election_time:uint64,
@@ -49,14 +49,14 @@ datatype ServerImplState = ServerImplState(
   current_leader:Option<uint64>,
   current_term:uint64,
   voted_for:Option<uint64>,
-  log:seq<CLogEntry>,
+  state.log:seq<CLogEntry>,
   // volatile state on all servers
   commit_index:uint64,
   last_applied:uint64,
   // volatile state on leaders
   next_index:map<EndPoint, uint64>,
   match_index:map<EndPoint, uint64>,
-  num_replicated:seq<int>, // log index -> num of replicated
+  num_replicated:seq<int>, // state.log index -> num of replicated
   vote_granted:map<EndPoint, uint64>, // server_id -> voted?(bool)
 
   random_generator:RandomGenerator,
@@ -76,57 +76,73 @@ class ServerImpl
   ghost var repr : set<object>;
 
   constructor() {
+    var random_generator := new RandomGenerator(0);
+    var appstate := AppStateMachine.Initialize();
+    this.state := ServerImplState(
+      /*config=*/ServerConfigState(0, ConfigState([], StaticParams())),
+      /*state.role=*/Follower,
+      /*next_heartbeat_time*/0,
+      /*next_election_time*/0,
+      /*current_leader=*/None,
+      /*current_term=*/1,
+      /*voted_for=*/None,
+      /*state.log=*/[],
+      /*commit_index=*/0,
+      /*last_applied=*/0,
+      /*next_index=*/map [],
+      /*match_index=*/map [],
+      /*num_replicated=*/[],
+      /*vote_granted=*/map [],
+      /*random_generator=*/random_generator,
+      /*app_state=*/appstate
+    );
     net_client := null;
-    config := ServerConfigState();
-    state := ServerImplState(
-      
-    )
-    
+    local_addr := EndPoint([]);
+    nextActionIndex := 0;
   }
 
   predicate Valid()
     reads this
-    reads this.body.app_state
+    reads this.state.app_state
     reads if net_client != null then NetClientIsValid.reads(net_client) else {}
   {
     && (0 <= nextActionIndex as int < RaftServerNumActions())
     && net_client != null
-    && ServerConfigStateIsValid(body.config)
+    && ServerConfigStateIsValid(state.config)
     && NetClientIsValid(net_client)
-    && EndPoint(net_client.MyPublicKey()) == local_addr
-    && EndPoint(net_client.MyPublicKey()) == config.server_ep
+    && EndPoint(net_client.MyPublicKey()) == local_addr == GetMyEp()
     && repr == { this } + NetClientRepr(net_client)
     && msg_grammar == CMessage_grammar()
-    && (current_leader.None? || (current_leader.Some? && current_leader.v as int < |config.global_config.server_eps|))
+    && (state.current_leader.None? || (state.current_leader.Some? && state.current_leader.v as int < |state.config.global_config.server_eps|))
     // term
-    && current_term as int <= MaxLogEntryTerm()
-    // log
-    && 1 <= |log| <= ServerMaxLogSize() as int
-    && log[0] == CLogEntry(0, 0, [], 0, 1, config.global_config.server_eps[0])
-    && (forall i :: 0 <= i < |log| ==> ValidLogEntry(log[i]))
+    && state.current_term as int <= MaxLogEntryTerm()
+    // state.log
+    && 1 <= |state.log| <= ServerMaxLogSize() as int
+    && state.log[0] == CLogEntry(0, 0, [], 0, 1, state.config.global_config.server_eps[0])
+    && (forall i :: 0 <= i < |state.log| ==> ValidLogEntry(state.log[i]))
     // TODO: this may not be true when truncating
-    && (forall i :: 0 <= i < |log| ==> log[i].index as int == i)
-    && LogEntrySeqIndexIncreasing(log)
+    && (forall i :: 0 <= i < |state.log| ==> state.log[i].index as int == i)
+    && LogEntrySeqIndexIncreasing(state.log)
     // commit_index & last_applied
-    && 0 <= last_applied <= commit_index
+    && 0 <= state.last_applied <= state.commit_index
     // next_index and match_index
     && (
-      role.Leader? ==> (
-        forall ep :: ep in config.global_config.server_eps ==> (
-          && ep in next_index 
-          && ep in match_index
-          && 1 <= next_index[ep] <= |log| as uint64
-          && 0 <= match_index[ep] < next_index[ep]
+      state.role.Leader? ==> (
+        forall ep :: ep in state.config.global_config.server_eps ==> (
+          && ep in state.next_index 
+          && ep in state.match_index 
+          && 1 <= state.next_index[ep] <= |state.log| as uint64
+          && 0 <= state.match_index[ep] < state.next_index[ep]
         )
       )
     )
     // vote_granted
     && (
-      role.Candidate? ==> (
-        forall ep :: ep in this.config.global_config.server_eps ==> ep in this.vote_granted
+      state.role.Candidate? ==> (
+        forall ep :: ep in this.state.config.global_config.server_eps ==> ep in this.state.vote_granted
       )
     )
-    && |config.global_config.server_eps| >= 1
+    && |state.config.global_config.server_eps| >= 1
   }
 
   function MapUint64MapValueToInt<T>(m:map<T, uint64>) : map<T, int>
@@ -139,34 +155,34 @@ class ServerImpl
 
   function AbstractifyToRaftServer() : RaftServer
     reads this
-    reads this.app_state
+    reads this.state.app_state
     reads if net_client != null then NetClientIsValid.reads(net_client) else {}
     requires Valid()
     ensures Valid()
   {
     RaftServer(
-      AbstractifyServerConfigStateToRaftServerConfig(config),
-      role,
-      next_heartbeat_time as int,
-      next_election_time as int,
-      if current_leader.Some? then Some(current_leader.v as int) else None(),
-      current_term as int,
-      if voted_for.Some? then Some(voted_for.v as int) else None(),
-      AbstractifyCLogEntrySeqToRaftLogEntrySeq(log),
-      commit_index as int,
-      last_applied as int,
-      MapUint64MapValueToInt(next_index),
-      MapUint64MapValueToInt(match_index),
-      num_replicated,
-      MapUint64MapValueToInt(vote_granted),
-      app_state.Abstractify()
+      AbstractifyServerConfigStateToRaftServerConfig(state.config),
+      state.role,
+      state.next_heartbeat_time as int,
+      state.next_election_time as int,
+      if state.current_leader.Some? then Some(state.current_leader.v as int) else None(),
+      state.current_term as int,
+      if state.voted_for.Some? then Some(state.voted_for.v as int) else None(),
+      AbstractifyCLogEntrySeqToRaftLogEntrySeq(state.log),
+      state.commit_index as int,
+      state.last_applied as int,
+      MapUint64MapValueToInt(state.next_index),
+      MapUint64MapValueToInt(state.match_index),
+      state.num_replicated,
+      MapUint64MapValueToInt(state.vote_granted),
+      state.app_state.Abstractify()
     )
   }
 
   function AbstractifyToRaftServerScheduler() : RaftServerScheduler
     requires Valid()
     reads this
-    reads this.app_state
+    reads this.state.app_state
     reads if net_client != null then NetClientIsValid.reads(net_client) else {}
   {
     RaftServerScheduler(
@@ -178,79 +194,82 @@ class ServerImpl
   method BecomeCandidate() returns ()
     requires this.Valid()
     modifies this
-    ensures this.role == Candidate
+    ensures this.state.role == Candidate
     ensures this.Valid()
+    ensures this.state == old(this.state).(role := Candidate, vote_granted := this.state.vote_granted)
     ensures this.net_client == old(this.net_client)
     ensures this.nextActionIndex == old(this.nextActionIndex)
   {
-    var i := 0;
+    var i:uint64 := 0;
+    var num_eps:uint64 := |state.config.global_config.server_eps| as uint64;
 
-    while i < |config.global_config.server_eps|
-      invariant 0 <= i <= |config.global_config.server_eps|
-      decreases |config.global_config.server_eps| - i
+    while i < num_eps
+      invariant 0 <= i <= num_eps
+      invariant num_eps as int == |state.config.global_config.server_eps|
+      decreases num_eps - i
       invariant Valid()
-      invariant forall j :: 0 <= j < i ==> config.global_config.server_eps[j] in vote_granted
+      invariant forall j :: 0 <= j < i ==> state.config.global_config.server_eps[j] in state.vote_granted
       invariant this.net_client == old(this.net_client)
       invariant this.nextActionIndex == old(this.nextActionIndex)
+      invariant this.state == old(this.state).(vote_granted := this.state.vote_granted)
     {
-      var ep := config.global_config.server_eps[i];
-      if ep == this.config.server_ep {
-        this.vote_granted := this.vote_granted[ep := 1];
+      var ep := state.config.global_config.server_eps[i];
+      if i == this.state.config.server_id {
+        this.state := this.state.(vote_granted := this.state.vote_granted[ep := 1]);
       } else {
-        this.vote_granted := this.vote_granted[ep := 0];
+        this.state := this.state.(vote_granted := this.state.vote_granted[ep := 0]);
       }
       i := i + 1;
     }
-    this.role := Candidate;
+    this.state := this.state.(role := Candidate);
   }
 
   method BecomeLeader() returns ()
     requires Valid()
     requires MaxLogEntryIndex() - LastLogEntryIndex() as int >= 1
-    requires this.role == Candidate
+    requires this.state.role == Candidate
     modifies this
-    ensures this.role.Leader?
+    ensures this.state.role.Leader?
     ensures this.net_client == old(this.net_client)
     ensures Valid()
     ensures this.nextActionIndex == old(this.nextActionIndex);
   {
     var i := 0;
     var last_log_entry := GetLastLogEntry();
-    assert log[|log| - 1].index == last_log_entry.index;
-    while i < |config.global_config.server_eps|
-      invariant 0 <= i <= |config.global_config.server_eps|
-      decreases |config.global_config.server_eps| - i
-      invariant !role.Leader?
-      invariant 1 <= |log| <= ServerMaxLogSize() as int
-      invariant log[|log| - 1] == old(log)[|old(log)| - 1]
-      invariant log[|log| - 1].index == old(log)[|old(log)| - 1].index
+    assert state.log[|state.log| - 1].index == last_log_entry.index;
+    while i < |state.config.global_config.server_eps|
+      invariant 0 <= i <= |state.config.global_config.server_eps|
+      decreases |state.config.global_config.server_eps| - i
+      invariant !state.role.Leader?
+      invariant 1 <= |state.log| <= ServerMaxLogSize() as int
+      invariant state.log[|state.log| - 1] == old(state.log)[|old(state.log)| - 1]
+      invariant state.log[|state.log| - 1].index == old(state.log)[|old(state.log)| - 1].index
       invariant forall i_ :: 0 <= i_ < i ==> (
-        var ep_ := config.global_config.server_eps[i_]; 
-        && ep_ in next_index 
-        && ep_ in match_index
-        && 1 <= next_index[ep_] <= |log| as uint64
-        && 0 <= match_index[ep_] < next_index[ep_]
+        var ep_ := state.config.global_config.server_eps[i_]; 
+        && ep_ in state.next_index 
+        && ep_ in state.match_index
+        && 1 <= state.next_index[ep_] <= |state.log| as uint64
+        && 0 <= state.match_index[ep_] < state.next_index[ep_]
       )
       invariant Valid()
-      invariant log == old(log)
+      invariant state.log == old(state.log)
       invariant this.net_client == old(this.net_client)
       invariant this.nextActionIndex == old(this.nextActionIndex)
     {
-      var ep := config.global_config.server_eps[i];
-      next_index := next_index[ep := last_log_entry.index + 1];
+      var ep := state.config.global_config.server_eps[i];
+      state := state.(next_index := state.next_index[ep := last_log_entry.index + 1]);
       assert last_log_entry.index >= 0;
-      assert next_index[ep] >= 1;
+      assert state.next_index[ep] >= 1;
       if ep != local_addr {
-        match_index := match_index[ep := 0];
+        state := state.(match_index := state.match_index[ep := 0]);
       } else {
-        match_index := match_index[ep := last_log_entry.index];
+        state := state.(match_index := state.match_index[ep := last_log_entry.index]);
       }
       i := i + 1;
     }
-    this.role := Leader;
-    var my_id := GetEndPointIndex(this.config.global_config, this.config.server_ep);
-    this.current_leader := Some(my_id);
-    assert forall ep :: ep in config.global_config.server_eps ==> ep in next_index && ep in match_index;
+    state := state.(role := Leader);
+    state := state.(current_leader := Some(this.state.config.server_id));
+    assert forall ep :: ep in state.config.global_config.server_eps ==> ep in state.next_index && ep in state.match_index;
   }
 
   method Init(
@@ -262,7 +281,7 @@ class ServerImpl
     requires nc.env == env
     requires NetClientIsValid(nc)
     requires ServerConfigStateIsValid(config)
-    requires EndPoint(nc.MyPublicKey()) == config.server_ep
+    requires EndPoint(nc.MyPublicKey()) == config.global_config.server_eps[config.server_id]
     requires WellFormedRaftServerConfig(AbstractifyServerConfigStateToRaftServerConfig(config))
     modifies this
     ensures ok ==> (
@@ -270,37 +289,35 @@ class ServerImpl
       && Env() == nc.env
     )
   {
-    this.config := config;
+    var my_id := config.server_id;
+    var random_generator := new RandomGenerator(my_id);
+    var appstate := AppStateMachine.Initialize();
+    this.state := ServerImplState(
+      /*config=*/config,
+      /*state.role=*/Follower,
+      /*next_heartbeat_time*/0,
+      /*next_election_time*/0,
+      /*current_leader=*/None,
+      /*current_term=*/1,
+      /*voted_for=*/None,
+      /*state.log=*/[CLogEntry(0, 0, [], 0, 1, config.global_config.server_eps[0])],
+      /*commit_index=*/0,
+      /*last_applied=*/0,
+      /*next_index=*/map [],
+      /*match_index=*/map [],
+      /*num_replicated=*/[],
+      /*vote_granted=*/map [],
+      /*random_generator=*/random_generator,
+      /*app_state=*/appstate
+    );
     this.net_client := nc;
     this.nextActionIndex := 0;
     this.local_addr := EndPoint(net_client.MyPublicKey());
     this.msg_grammar := CMessage_grammar();
     this.repr := { this } + NetClientRepr(net_client);
-    this.current_leader := Some(0);
-    this.log := [CLogEntry(0, 0, [], 0, 1, config.global_config.server_eps[0])];
-    this.role := Follower;
-    var my_id := GetEndPointIndex(this.config.global_config, this.config.server_ep);
-    this.random_generator := new RandomGenerator(my_id);
-    // TODO: Remove this
-    this.current_term := 1;
-    this.last_applied := 0;
-    this.commit_index := 0;
     assert LastLogEntryIndex() == 0;
-    // if this.current_leader.Some? && this.config.server_id == this.current_leader.v {
-    //   assert MaxLogEntryIndex() - LastLogEntryIndex() as int >= 1;
-    //   this.BecomeCandidate();
-    //   assert net_client.env == nc.env;
-    //   this.BecomeLeader();
-    //   assert net_client.env == nc.env;
-    // } else{
-    //   this.role := Follower;
-    //   this.current_term := 0;
-    // }
-    this.role := Follower;
-    this.current_term := 0;
     assert net_client.env == nc.env;
     ok := true;
-    app_state := AppStateMachine.Initialize();
   }
 
   function Env() : HostEnvironment
@@ -310,39 +327,50 @@ class ServerImpl
     net_client.env
   }
 
-  method GetMyIndex() returns(index:uint64)
-    requires Valid()
-    ensures 0 <= index as int < |config.global_config.server_eps|
-    ensures config.global_config.server_eps[index] == config.server_ep
+  function method GetMyIndex() : uint64
+    reads this
+    requires ServerConfigStateIsValid(state.config)
+    ensures 0 <= GetMyIndex() as int < |state.config.global_config.server_eps|
+    ensures state.config.server_id == GetMyIndex()
   {
-    index := GetEndPointIndex(config.global_config, config.server_ep);
+    state.config.server_id
+  }
+
+  function method GetMyEp() : EndPoint
+    reads this
+    requires ServerConfigStateIsValid(state.config)
+    ensures GetMyEp() in state.config.global_config.server_eps
+    ensures GetMyEp() == state.config.global_config.server_eps[state.config.server_id]
+  {
+    state.config.global_config.server_eps[state.config.server_id]
   }
 
   function method LastLogEntryIndex() : uint64
     requires Valid()
     reads this
-    reads this.app_state
+    reads this.state.app_state
     reads if net_client != null then NetClientIsValid.reads(net_client) else {}
-    requires 1 <= |log| <= ServerMaxLogSize()
+    requires 1 <= |state.log| <= ServerMaxLogSize()
     ensures LastLogEntryIndex() as int <= MaxLogEntryIndex()
     // TODO: this may not be true when truncating
-    ensures LastLogEntryIndex() as int == |log| - 1
+    ensures LastLogEntryIndex() as int == |state.log| - 1
   {
-    log[|log| - 1].index
+    state.log[|state.log| - 1].index
   }
 
   method GetLogEntry(index: uint64) returns (log_entry:Option<CLogEntry>)
     requires Valid()
+    ensures 0 <= index <= state.log[|state.log|-1].index ==> log_entry.Some?
     ensures log_entry.Some? ==> (
-      && 0 <= index < |log| as uint64
-      && 0 <= index <= |log| as uint64 - 1
-      && log_entry.v in log
-      && log_entry.v == log[index]
+      && 0 <= index < |state.log| as uint64
+      && 0 <= index <= |state.log| as uint64 - 1
+      && log_entry.v in state.log
+      && log_entry.v == state.log[index]
     )
     ensures Valid()
   {
-    if 0 <= index < |log| as uint64 {
-      log_entry := Some(log[index]);
+    if 0 <= index < |state.log| as uint64 {
+      log_entry := Some(state.log[index]);
     } else {
       log_entry := None;
     }
@@ -350,31 +378,31 @@ class ServerImpl
 
   method GetLastLogEntry() returns(log_entry:CLogEntry)
     requires Valid()
-    requires |log| - 1 >= 0
-    ensures log_entry in log
-    ensures log_entry == log[|log| - 1]
+    requires |state.log| - 1 >= 0
+    ensures log_entry in state.log
+    ensures log_entry == state.log[|state.log| - 1]
     ensures Valid();
   {
-    assert |log| - 1 >= 0;
-    log_entry := log[|log| - 1];
+    assert |state.log| - 1 >= 0;
+    log_entry := state.log[|state.log| - 1];
   }
 
   method AddLogEntries(entries:seq<CLogEntry>) returns()
     requires Valid()
     requires forall entry :: entry in entries ==> ValidLogEntry(entry)
-    requires |entries| <= ServerMaxLogSize() - |this.log|
+    requires |entries| <= ServerMaxLogSize() - |this.state.log|
     requires LogEntrySeqIndexIncreasing(entries)
-    requires |entries| > 0 ==> (LastLogEntryIndex() + 1 == entries[0].index == |log| as uint64)
-    requires (forall i :: 0 <= i < |entries| ==> entries[i].index as int == i+|log|)
+    requires |entries| > 0 ==> (LastLogEntryIndex() + 1 == entries[0].index == |state.log| as uint64)
+    requires (forall i :: 0 <= i < |entries| ==> entries[i].index as int == i+|state.log|)
     modifies this
     ensures Valid()
-    ensures this.role == old(this.role)
-    ensures log == old(log) + entries
+    ensures this.state.role == old(this.state.role)
+    ensures state.log == old(state.log) + entries
     ensures this.Env() == old(this.Env())
     ensures this.nextActionIndex == old(this.nextActionIndex)
     ensures this.repr == old(this.repr)
   {
-    this.log := this.log + entries;
+    state := state.(log := state.log + entries);
   }
 
   method CreateLogEntry(client_ep:EndPoint, seqno_req:uint64, req:CAppRequest) returns (ok:bool, entry:CLogEntry)
@@ -396,150 +424,152 @@ class ServerImpl
       return;
     }
 
-    entry := CLogEntry(this.current_term, last_log_index + 1, req, seqno_req, /*is_commited*/0, client_ep);
+    entry := CLogEntry(this.state.current_term, last_log_index + 1, req, seqno_req, /*is_commited*/0, client_ep);
     ok := true;
   }
 
   method TryToIncreaseCommitIndexUntil(index:uint64) returns (ok:bool)
-    requires this.role == Leader
+    requires this.state.role == Leader
     requires Valid()
     modifies this
     ensures Valid()
     ensures this.repr == old(this.repr)
     ensures this.nextActionIndex == old(this.nextActionIndex)
   {
-    if (this.commit_index >= MaxLogEntryIndex() as uint64 
+    if (this.state.commit_index >= MaxLogEntryIndex() as uint64 
       || index >= MaxLogEntryIndex() as uint64
-      || index >= |log| as uint64)
+      || index >= |state.log| as uint64)
     {
       ok := false;
       return;
-    } else if (this.commit_index >= index) {
+    } else if (this.state.commit_index >= index) {
       // already commit, but still ok.
       ok := true;
       return;
     } else {
       ok := true;
     }
-    var i:uint64 := this.commit_index + 1;
-    assert index < |log| as uint64;
+    var i:uint64 := this.state.commit_index + 1;
+    assert index < |state.log| as uint64;
     while i - 1 < index
-      invariant this.commit_index <= i - 1 <= index
+      invariant this.state.commit_index <= i - 1 <= index
       decreases index - (i - 1)
       invariant i <= index + 1
-      invariant |log| <= ServerMaxLogSize()
-      invariant index < |log| as uint64
+      invariant |state.log| <= ServerMaxLogSize()
+      invariant index < |state.log| as uint64
       invariant Valid()
-      invariant this.role == Leader
+      invariant this.state.role == Leader
       invariant this.repr == old(this.repr)
       invariant this.nextActionIndex == old(this.nextActionIndex)
     {
       var count:uint64 := 0;
-      for ep_id:uint64 := 0 to |this.config.global_config.server_eps| as uint64
+      for ep_id:uint64 := 0 to |this.state.config.global_config.server_eps| as uint64
         invariant Valid()
-        invariant this.role == Leader
+        invariant this.state.role == Leader
         invariant i <= index + 1
-        invariant |log| <= ServerMaxLogSize()
-        invariant index < |log| as uint64
+        invariant |state.log| <= ServerMaxLogSize()
+        invariant index < |state.log| as uint64
         invariant count <= ep_id
         invariant this.repr == old(this.repr)
         invariant this.nextActionIndex == old(this.nextActionIndex)
       {
-        var ep := this.config.global_config.server_eps[ep_id];
-        assert forall ep :: ep in config.global_config.server_eps ==> ep in match_index;
-        if this.match_index[ep] >= i {
+        var ep := this.state.config.global_config.server_eps[ep_id];
+        assert forall ep :: ep in state.config.global_config.server_eps ==> ep in state.match_index;
+        if this.state.match_index[ep] >= i {
           count := count + 1;
         }
       }
-      assert 0 <= commit_index < |log| as uint64;
-      if (count >= CRaftMinQuorumSize(this.config.global_config)) {
-        this.commit_index := i;
+      assert 0 <= state.commit_index < |state.log| as uint64;
+      if (count >= CRaftMinQuorumSize(this.state.config.global_config)) {
+        state := state.(commit_index := i);
       } else {
         break;
       }
-      assert 0 <= commit_index == i <= index + 1 <= |log| as uint64;
+      assert 0 <= state.commit_index == i <= index + 1 <= |state.log| as uint64;
       i := i + 1;
     }
   }
 
-  method PrepareAppendEntriesPacket(ep:EndPoint, is_heartbeat:bool) returns (packet:CPacket)
-    requires this.role.Leader?
+  method PrepareAppendEntriesPacket(ep_id:uint64, is_heartbeat:bool) returns (packet:CPacket)
+    requires this.state.role.Leader?
     requires Valid()
-    requires ep in config.global_config.server_eps
+    requires 0 <= ep_id as int < |state.config.global_config.server_eps|
     ensures packet.msg.CMessage_AppendEntries?
-    ensures packet.dst == ep
-    ensures packet.src == this.config.server_ep == this.local_addr
+    ensures packet.dst == state.config.global_config.server_eps[ep_id]
+    ensures packet.src == GetMyEp() == this.local_addr == state.config.global_config.server_eps[GetMyIndex()]
     ensures CPacketIsSendable(packet)
     ensures CPacketIsAbstractable(packet)
     ensures this.nextActionIndex == old(this.nextActionIndex)
+    ensures Valid()
   {
-    var next_index:uint64 := this.next_index[ep];
+    var ep := state.config.global_config.server_eps[ep_id];
+    var next_index:uint64 := this.state.next_index[ep];
     var entries;
     // if is_heartbeat {
     //   entries := [];
     // } else {
     //   var log_index_end:uint64;
-    //   if |this.log| < next_index as int + LogEntrySeqSizeLimit() {
-    //     log_index_end := |this.log| as uint64;
+    //   if |this.state.log| < next_index as int + LogEntrySeqSizeLimit() {
+    //     log_index_end := |this.state.log| as uint64;
     //   } else {
     //     log_index_end := next_index + LogEntrySeqSizeLimit() as uint64;
     //   }
-    //   entries := this.log[next_index..log_index_end];
+    //   entries := this.state.log[next_index..log_index_end];
     //   assert |entries| <= LogEntrySeqSizeLimit();
     // }
 
     // also send entries even it's heartbeat
     var log_index_end:uint64;
-    if |this.log| < next_index as int + LogEntrySeqSizeLimit() {
-      log_index_end := |this.log| as uint64;
+    if |this.state.log| < next_index as int + LogEntrySeqSizeLimit() {
+      log_index_end := |this.state.log| as uint64;
     } else {
       log_index_end := next_index + LogEntrySeqSizeLimit() as uint64;
     }
-    entries := this.log[next_index..log_index_end];
+    entries := this.state.log[next_index..log_index_end];
     assert |entries| <= LogEntrySeqSizeLimit();
 
     var prev_log_index:uint64 := next_index - 1;
     assert prev_log_index >= 0;
-    assert prev_log_index as int < |log|;
-    var prev_log_term := log[prev_log_index].term;
-    var leader_ep := this.config.server_ep;
+    assert prev_log_index as int < |state.log|;
+    var prev_log_term := state.log[prev_log_index].term;
+    var leader_ep := GetMyEp();
 
     var last_log_entry := GetLastLogEntry();
-    var ep_id := GetEndPointIndex(this.config.global_config, ep);
+    var ep_id := GetEndPointIndex(this.state.config.global_config, ep);
     print "To ", ep_id, ": next_index=", next_index, ",last_log_entry.index=", last_log_entry.index, "\n";
     packet := CPacket(
       ep, 
       leader_ep, 
       CMessage_AppendEntries(
-        this.current_term, leader_ep, prev_log_index, prev_log_term, entries, this.commit_index
+        state.current_term, leader_ep, prev_log_index, prev_log_term, entries, state.commit_index
       )
     );
     assert CPacketIsSendable(packet);
   }
 
   method VoteRequestPassed() returns (passed:bool)
-    requires this.role == Candidate
+    requires this.state.role == Candidate
     requires Valid()
     ensures Valid()
   {
     var count:uint64 := 0;
-    for ep_id:uint64 := 0 to |this.config.global_config.server_eps| as uint64
+    for ep_id:uint64 := 0 to |this.state.config.global_config.server_eps| as uint64
       invariant Valid()
       invariant count <= ep_id <= 0xFFFF_FFFF_FFFF_FFFF
     {
-      var ep := this.config.global_config.server_eps[ep_id];
-      print "ep_id=", ep_id, ": ", this.vote_granted[ep], "\n";
-      if this.vote_granted[ep] == 1 {
+      var ep := this.state.config.global_config.server_eps[ep_id];
+      print "ep_id=", ep_id, ": ", this.state.vote_granted[ep], "\n";
+      if this.state.vote_granted[ep] == 1 {
         count := count + 1;
       }
     }
     print "count=", count, "\n";
-    passed := count >= CRaftMinQuorumSize(this.config.global_config);
+    passed := count >= CRaftMinQuorumSize(this.state.config.global_config);
   }
 
   predicate ReceivedPacketProperties(cpacket:CPacket, netEvent0:NetEvent, io0:RaftIo)
     reads this
-    requires ServerConfigStateIsValid(config)
+    requires ServerConfigStateIsValid(state.config)
   {
     && CPacketIsSendable(cpacket)
     && EndPointIsValidPublicKey(cpacket.src)
@@ -554,103 +584,107 @@ class ServerImpl
 
 method Server_CreateAppendEntriesForAll(server_impl:ServerImpl, is_heartbeat:bool) returns (outbound_packets:seq<CPacket>)
   requires server_impl.Valid()
-  requires server_impl.role.Leader?
+  requires server_impl.state.role.Leader?
   ensures server_impl.Valid()
-  ensures server_impl.role.Leader?
-  ensures |outbound_packets| <= |server_impl.config.global_config.server_eps|
+  ensures server_impl.state.role.Leader?
+  ensures |outbound_packets| <= |server_impl.state.config.global_config.server_eps|
   ensures (forall p :: p in outbound_packets ==> (
-    CPacketIsSendable(p) && CPacketIsAbstractable(p) && p.src == server_impl.config.server_ep
+    CPacketIsSendable(p) && CPacketIsAbstractable(p) && p.src == server_impl.GetMyEp()
   ))
   ensures server_impl.Env() == old(server_impl.Env())
   ensures server_impl.nextActionIndex == old(server_impl.nextActionIndex)
   ensures server_impl.repr == old(server_impl.repr)
   ensures OutboundPacketsIsValid(PacketSequence(outbound_packets))
-  ensures server_impl.next_heartbeat_time == old(server_impl.next_heartbeat_time)
+  ensures server_impl.state.next_heartbeat_time == old(server_impl.state.next_heartbeat_time)
   ensures forall packet :: packet in outbound_packets ==> packet.msg.CMessage_AppendEntries?
-  ensures forall i_ :: 0 <= i_ < |server_impl.config.global_config.server_eps| && server_impl.config.global_config.server_eps[i_] != server_impl.config.server_ep ==> 
-      (exists packet :: packet in outbound_packets && packet.dst == server_impl.config.global_config.server_eps[i_])
+  ensures forall i_ :: 0 <= i_ < |server_impl.state.config.global_config.server_eps| as uint64 && i_ != server_impl.GetMyIndex() ==> 
+      (exists packet :: packet in outbound_packets && packet.dst == server_impl.state.config.global_config.server_eps[i_]);
 {
   outbound_packets := [];
-  var i := 0;
-  while i < |server_impl.config.global_config.server_eps|
-    decreases |server_impl.config.global_config.server_eps| - i
+  var i:uint64 := 0;
+  assert |server_impl.state.config.global_config.server_eps| <= 0xFFFF_FFFF_FFFF_FFFF;
+  while i < |server_impl.state.config.global_config.server_eps| as uint64
+    decreases |server_impl.state.config.global_config.server_eps| - i as int
     invariant server_impl.Valid()
-    invariant 0 <= i <= |server_impl.config.global_config.server_eps|
-    invariant server_impl.role.Leader?
-    invariant |outbound_packets| <= i
-    invariant |outbound_packets| <= |server_impl.config.global_config.server_eps|
+    invariant 0 <= i as int <= |server_impl.state.config.global_config.server_eps|
+    invariant server_impl.state.role.Leader?
+    invariant |outbound_packets| <= i as int
+    invariant |outbound_packets| <= |server_impl.state.config.global_config.server_eps|
     invariant (forall p :: p in outbound_packets ==> (
-      CPacketIsSendable(p) && CPacketIsAbstractable(p) && p.src == server_impl.config.server_ep
+      CPacketIsSendable(p) && CPacketIsAbstractable(p) && p.src == server_impl.GetMyEp()
     ))
     invariant server_impl.Env() == old(server_impl.Env())
     invariant server_impl.nextActionIndex == old(server_impl.nextActionIndex)
     invariant server_impl.repr == old(server_impl.repr)
     invariant forall packet_ :: packet_ in outbound_packets ==> packet_.msg.CMessage_AppendEntries?
-    invariant forall i_ :: 0 <= i_ < i && server_impl.config.global_config.server_eps[i_] != server_impl.config.server_ep ==> 
-      (exists packet :: packet in outbound_packets && packet.dst == server_impl.config.global_config.server_eps[i_])
+    invariant forall i_ :: 0 <= i_ < i && i_ != server_impl.GetMyIndex() ==> 
+      (exists packet :: packet in outbound_packets && packet.dst == server_impl.state.config.global_config.server_eps[i_])
   {
-    var ep := server_impl.config.global_config.server_eps[i];
-    if ep != server_impl.config.server_ep {
+    if i != server_impl.GetMyIndex() {
       var packet;
-      packet := server_impl.PrepareAppendEntriesPacket(ep, is_heartbeat);
+      packet := server_impl.PrepareAppendEntriesPacket(i, is_heartbeat);
       print "ready to send to ", i, " with AppendEntries(", |packet.msg.entries|, ")\n";
       assert CPacketIsSendable(packet);
       outbound_packets := outbound_packets + [packet];
     }
     i := i + 1;
-    assert |outbound_packets| <= i;
   }
+  assert forall i_ :: 0 <= i_ < |server_impl.state.config.global_config.server_eps| as uint64 && i_ != server_impl.GetMyIndex() ==> 
+      (exists packet :: packet in outbound_packets && packet.dst == server_impl.state.config.global_config.server_eps[i_]);
 }
 
-method Server_CreateRequestVoteForAll(server_impl:ServerImpl) returns (ok:bool, outbound_packets:seq<CPacket>)
+method Server_CreateRequestVoteForAll(server_impl:ServerImpl) returns (outbound_packets:seq<CPacket>)
   requires server_impl.Valid()
-  requires server_impl.role.Candidate?
+  requires server_impl.state.role.Candidate?
   ensures server_impl.Valid()
-  ensures server_impl.role.Candidate?
-  ensures |outbound_packets| <= |server_impl.config.global_config.server_eps|
+  ensures server_impl.state.role.Candidate?
+  ensures |outbound_packets| <= |server_impl.state.config.global_config.server_eps|
   ensures (forall p :: p in outbound_packets ==> (
-    CPacketIsSendable(p) && CPacketIsAbstractable(p) && p.src == server_impl.config.server_ep
+    CPacketIsSendable(p) && CPacketIsAbstractable(p) && p.src == server_impl.GetMyEp()
   ))
   ensures server_impl.Env() == old(server_impl.Env())
   ensures server_impl.nextActionIndex == old(server_impl.nextActionIndex)
   ensures server_impl.repr == old(server_impl.repr)
-  ensures ok ==> (
-    && OutboundPacketsIsValid(PacketSequence(outbound_packets))
-  )
+  ensures OutboundPacketsIsValid(PacketSequence(outbound_packets))
+  ensures forall packet :: packet in outbound_packets ==> packet.msg.CMessage_RequestVote? 
+  ensures forall i_ :: 0 <= i_ < |server_impl.state.config.global_config.server_eps| as uint64 && i_ != server_impl.GetMyIndex() ==> 
+            (exists packet :: packet in outbound_packets && packet.dst == server_impl.state.config.global_config.server_eps[i_])
 {
   outbound_packets := [];
-  var i := 0;
+  var i:uint64 := 0;
+  assert |server_impl.state.config.global_config.server_eps| <= 0xFFFF_FFFF_FFFF_FFFF;
   var my_last_log := server_impl.GetLastLogEntry();
-  while i < |server_impl.config.global_config.server_eps|
-    decreases |server_impl.config.global_config.server_eps| - i
+  while i < |server_impl.state.config.global_config.server_eps| as uint64
+    decreases |server_impl.state.config.global_config.server_eps| - i as int
     invariant server_impl.Valid()
-    invariant 0 <= i <= |server_impl.config.global_config.server_eps|
-    invariant server_impl.role.Candidate?
-    invariant |outbound_packets| <= i
-    invariant |outbound_packets| <= |server_impl.config.global_config.server_eps|
+    invariant 0 <= i as int<= |server_impl.state.config.global_config.server_eps|
+    invariant server_impl.state.role.Candidate?
+    invariant |outbound_packets| <= i as int
+    invariant |outbound_packets| <= |server_impl.state.config.global_config.server_eps|
     invariant (forall p :: p in outbound_packets ==> (
-      CPacketIsSendable(p) && CPacketIsAbstractable(p) && p.src == server_impl.config.server_ep
+      CPacketIsSendable(p) && CPacketIsAbstractable(p) && p.src == server_impl.GetMyEp()
     ))
     invariant server_impl.Env() == old(server_impl.Env())
     invariant server_impl.nextActionIndex == old(server_impl.nextActionIndex)
     invariant server_impl.repr == old(server_impl.repr)
+    invariant forall packet :: packet in outbound_packets ==> packet.msg.CMessage_RequestVote? 
+    invariant forall i_ :: 0 <= i_ < i as uint64 && i_ != server_impl.GetMyIndex() ==> 
+        (exists packet :: packet in outbound_packets && packet.dst == server_impl.state.config.global_config.server_eps[i_]);
   {
-    var ep := server_impl.config.global_config.server_eps[i];
-    if ep != server_impl.config.server_ep {
+    if i != server_impl.GetMyIndex() {
+      var ep := server_impl.state.config.global_config.server_eps[i];
       var msg := CMessage_RequestVote(
-        server_impl.current_term, server_impl.config.server_id, my_last_log.index, my_last_log.term
+        server_impl.state.current_term, server_impl.GetMyIndex(), my_last_log.index, my_last_log.term
       );
-      var packet := CPacket(
-        ep, server_impl.config.server_ep, msg
-      );
+      var packet := CPacket(ep, server_impl.GetMyEp(), msg);
       print "ready to send to ", i, " with RequestVote(", ")\n";
       assert CPacketIsSendable(packet);
       outbound_packets := outbound_packets + [packet];
     }
     i := i + 1;
-    assert |outbound_packets| <= i;
   }
-  ok := true;
+  assert forall i_ :: 0 <= i_ < |server_impl.state.config.global_config.server_eps| as uint64 && i_ != server_impl.GetMyIndex() ==> 
+          (exists packet :: packet in outbound_packets && packet.dst == server_impl.state.config.global_config.server_eps[i_]);
 }
 
 }

@@ -6,21 +6,27 @@ module Common__UpperBound_i {
 import opened Native__NativeTypes_s
 import opened Common__UpperBound_s
 
-method UpperBoundedAdditionImpl(x:uint64, y:uint64, u:uint64) returns (sum:uint64)
-  ensures sum as int == UpperBoundedAddition(x as int, y as int, UpperBoundFinite(u as int));
+// method UpperBoundedAdditionImpl(x:uint64, y:uint64, u:uint64) returns (sum:uint64)
+//   ensures sum as int == UpperBoundedAddition(x as int, y as int, UpperBoundFinite(u as int));
+// {
+//   if y >= u
+//   {
+//     sum := u;
+//   }
+//   else if x >= u - y
+//   {
+//     sum := u;
+//   }
+//   else
+//   {
+//     sum := x + y;
+//   }
+// }
+
+function method UpperBoundedAdditionImpl(x:uint64, y:uint64, u:uint64) : uint64
+  ensures UpperBoundedAdditionImpl(x, y, u) as int == UpperBoundedAddition(x as int, y as int, UpperBoundFinite(u as int));
 {
-  if y >= u
-  {
-    sum := u;
-  }
-  else if x >= u - y
-  {
-    sum := u;
-  }
-  else
-  {
-    sum := x + y;
-  }
+  if y >= u then u else (if x >= u - y then u else x + y)
 }
 
 }

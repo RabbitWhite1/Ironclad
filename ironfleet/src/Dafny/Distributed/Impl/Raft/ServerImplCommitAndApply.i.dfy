@@ -50,7 +50,7 @@ method Server_Next_CommitAndApply(server_impl:ServerImpl)
             && server_impl.Valid()
             && server_impl.nextActionIndex == old(server_impl.nextActionIndex)
             // TOPROVE
-            && Q_RaftServerScheduler_Next(old(r.AbstractifyToRaftServerScheduler()), r.AbstractifyToRaftServerScheduler(), ios)
+            && Q_RaftServerScheduler_Next(old(server_impl.AbstractifyToRaftServerScheduler()), server_impl.AbstractifyToRaftServerScheduler(), ios)
             && RawIoConsistentWithSpecIO(net_event_log, ios)
             && OnlySentMarshallableData(net_event_log)
             && old(server_impl.Env().net.history()) + net_event_log == server_impl.Env().net.history()

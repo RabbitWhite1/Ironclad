@@ -77,6 +77,8 @@ function AbstractifyCLogEntryToRaftLogEntry(entry:CLogEntry) : LogEntry
 }
 
 function AbstractifyCLogEntrySeqToRaftLogEntrySeq(entries:seq<CLogEntry>) : seq<LogEntry>
+  ensures |entries| == |AbstractifyCLogEntrySeqToRaftLogEntrySeq(entries)|
+  ensures forall i :: 0 <= i < |entries| ==> AbstractifyCLogEntryToRaftLogEntry(entries[i]) == AbstractifyCLogEntrySeqToRaftLogEntrySeq(entries)[i]
 {
   if |entries| == 0 then []
   else [AbstractifyCLogEntryToRaftLogEntry(entries[0])] + AbstractifyCLogEntrySeqToRaftLogEntrySeq(entries[1..])
