@@ -34,6 +34,7 @@ import opened Raft__CMessage_i
 import opened Raft__NetRaft_i
 import opened Raft__PacketParsing_i
 import opened Raft__QRelations_i
+import opened Raft__Server_i
 import opened Raft__ServerImpl_i
 import opened Raft__Types_i
 import opened Raft__ServerImplDelivery_i
@@ -42,12 +43,15 @@ import opened Raft__ServerImplProcessPacketX1_i
 //////////////////////////////////////////////////////////
 // Process request from client
 //////////////////////////////////////////////////////////
-method Server_Next_ProcessRequest(server_impl:ServerImpl, ghost old_net_history:seq<NetEvent>, rr:ReceiveResult, ghost receive_event:NetEvent)
+method {:timeLimitMultiplier 2} Server_Next_ProcessRequest(server_impl:ServerImpl, rr:ReceiveResult, ghost old_net_history:seq<NetEvent>, ghost receive_event:NetEvent)
   returns (ok:bool, ghost net_event_log:seq<NetEvent>, ghost ios:seq<RaftIo>)
-  requires receive_event.LIoOpReceive?
+  // recved things
   requires rr.RRPacket?
-  requires NetPacketIsAbstractable(receive_event.r)
   requires rr.cpacket.msg.CMessage_Request?
+  requires receive_event.LIoOpReceive?
+  requires NetPacketIsAbstractable(receive_event.r)
+  requires AbstractifyNetPacketToRaftPacket(receive_event.r) == AbstractifyCPacketToRaftPacket(rr.cpacket)
+  // server
   requires server_impl.Valid()
   requires server_impl.Env().net.history() == old_net_history + [receive_event]
   requires CPacketIsSendable(rr.cpacket)
@@ -60,7 +64,7 @@ method Server_Next_ProcessRequest(server_impl:ServerImpl, ghost old_net_history:
   ensures ok ==> 
             && server_impl.Valid()
             && server_impl.nextActionIndex == old(server_impl.nextActionIndex)
-            // PROVE
+            // TOPROVE
             // && (|| Q_RaftServer_Next_ProcessPacket(old(server_impl.AbstractifyToRaftServer()), server_impl.AbstractifyToRaftServer(), ios)
             //     || (&& IosReflectIgnoringUnsendable(net_event_log)
             //        && old(server_impl.AbstractifyToRaftServer()) == server_impl.AbstractifyToRaftServer()))
@@ -179,13 +183,14 @@ method Server_ResetNextElectionTime(server_impl:ServerImpl) returns (ghost clock
 //////////////////////////////////////////////////////////
 // Process AppendEntriesReply
 //////////////////////////////////////////////////////////
-method Server_HandleAppendEntriesReply(server_impl:ServerImpl, ghost old_net_history:seq<NetEvent>, rr:ReceiveResult, ghost receive_event:NetEvent) 
+method {:timeLimitMultiplier 8} Server_HandleAppendEntriesReply(server_impl:ServerImpl, rr:ReceiveResult, ghost old_net_history:seq<NetEvent>, ghost receive_event:NetEvent) 
   returns (ok:bool, ghost net_event_log:seq<NetEvent>, ghost ios:seq<RaftIo>)
   // About recved things
-  requires receive_event.LIoOpReceive?
   requires rr.RRPacket?
-  requires NetPacketIsAbstractable(receive_event.r)
   requires rr.cpacket.msg.CMessage_AppendEntriesReply?
+  requires receive_event.LIoOpReceive?
+  requires NetPacketIsAbstractable(receive_event.r)
+  requires AbstractifyNetPacketToRaftPacket(receive_event.r) == AbstractifyCPacketToRaftPacket(rr.cpacket)
   // About server
   requires server_impl.state.role == Leader
   requires server_impl.Valid()
@@ -195,15 +200,12 @@ method Server_HandleAppendEntriesReply(server_impl:ServerImpl, ghost old_net_his
   modifies server_impl, server_impl.repr, server_impl.net_client;
   ensures server_impl.repr == old(server_impl.repr)
   ensures server_impl.net_client != null
-  ensures server_impl.Env().Valid() && server_impl.Env().ok.ok() ==> ok
+  // ensures server_impl.Env().Valid() && server_impl.Env().ok.ok() ==> ok
   ensures server_impl.Env() == old(server_impl.Env());
   ensures ok ==> 
             && server_impl.Valid()
             && server_impl.nextActionIndex == old(server_impl.nextActionIndex)
-            // PROVE
-            // && (|| Q_RaftServer_Next_ProcessPacket(old(server_impl.AbstractifyToRaftServer()), server_impl.AbstractifyToRaftServer(), ios)
-            //     || (&& IosReflectIgnoringUnsendable(net_event_log)
-            //        && old(server_impl.AbstractifyToRaftServer()) == server_impl.AbstractifyToRaftServer()))
+            && Q_RaftServer_Next_ProcessPacket(old(server_impl.AbstractifyToRaftServer()), server_impl.AbstractifyToRaftServer(), ios)
             && RawIoConsistentWithSpecIO(net_event_log, ios)
             && OnlySentMarshallableData(net_event_log)
             && old_net_history + net_event_log == server_impl.Env().net.history()
@@ -221,12 +223,15 @@ method Server_HandleAppendEntriesReply(server_impl:ServerImpl, ghost old_net_his
     server_impl.state := server_impl.state.(
       current_term := msg.term, voted_for := None, role := Follower
     );
+    reveal Q_RaftServer_Next_ProcessPacket();
+      
     return;
   }
   
   var ep := rr.cpacket.src;
   if (ep !in server_impl.state.config.global_config.server_eps) {
     print "[Error] src of the packet not in cluster\n";
+    ok := false;
     return;
   }
 
@@ -234,10 +239,12 @@ method Server_HandleAppendEntriesReply(server_impl:ServerImpl, ghost old_net_his
     if (msg.success == 1) {
       if (msg.match_index > MaxLogEntryIndex() as uint64 - 1) {
         print "[Error] match_index too large\n";
+        ok := false;
         return;
       }
       if (msg.match_index + 1 > |server_impl.state.log| as uint64) {
         print "[Error] should not be\n";
+        ok := false;
         return;
       }
       if (msg.match_index > server_impl.state.match_index[ep]) {
@@ -248,11 +255,30 @@ method Server_HandleAppendEntriesReply(server_impl:ServerImpl, ghost old_net_his
       ok := server_impl.TryToIncreaseCommitIndexUntil(server_impl.state.match_index[ep]);
       if (!ok) { 
         print "[Error] TryToIncreaseCommitIndexUntil failed, ", server_impl.state.commit_index, "\n";
-        ok := true;
+        ok := false;
         return;
       } else {
         print "[Info] Committed up to ", server_impl.state.commit_index, "\n";
       }
+      assert (
+        if msg.match_index > old(server_impl.state.match_index[ep]) then
+          && server_impl.state.match_index == old(server_impl.state.match_index[ep := msg.match_index])
+        else
+          && server_impl.state.match_index == old(server_impl.state.match_index)
+      );
+      
+      ghost var raft_server := old(server_impl.AbstractifyToRaftServer());
+      ghost var raft_server' := server_impl.AbstractifyToRaftServer();
+      ghost var raft_received_packet := AbstractifyCPacketToRaftPacket(rr.cpacket);
+      ghost var raft_sent_packets := ExtractSentPacketsFromIos(ios);
+      
+      reveal ExtractSentPacketsFromIos();
+      assert raft_sent_packets == [];
+
+      reveal Q_RaftServer_Next_ProcessAppendEntriesReply();
+      assert Q_RaftServer_Next_ProcessAppendEntriesReply(raft_server, raft_server', raft_received_packet, raft_sent_packets);
+      reveal Q_RaftServer_Next_ProcessPacket();
+      assert Q_RaftServer_Next_ProcessPacket(raft_server, raft_server', ios);
     } else {
       var decreased_index;
       if server_impl.state.next_index[ep] > LogEntrySeqSizeLimit() as uint64 {
@@ -264,21 +290,59 @@ method Server_HandleAppendEntriesReply(server_impl:ServerImpl, ghost old_net_his
         match_index := server_impl.state.match_index[ep := 0], 
         next_index := server_impl.state.next_index[ep := decreased_index]
       );
-    }
-  }
 
+      var ep_id := GetEndPointIndex(server_impl.state.config.global_config, ep);
+      var packet := server_impl.PrepareAppendEntriesPacket(ep_id, false);
+      var outbound_packet := OutboundPacket(Some(packet));
+      ghost var log_tail, ios_tail;
+      ok, log_tail, ios_tail := DeliverOutboundPackets(server_impl, outbound_packet);
+      if (!ok) { return; }
+      ios := ios + ios_tail;
+      net_event_log := net_event_log + log_tail;
+      assert net_event_log[0].LIoOpReceive?;
+      assert forall i::0<=i<|log_tail| ==> AbstractifyNetEventToRaftIo(log_tail[i]) == ios_tail[i];
+      assert forall i::0<=i<|log_tail| ==> log_tail[i].LIoOpSend? && ios_tail[i].LIoOpSend?;
+      assert forall i :: 1 <= i < |net_event_log| ==> net_event_log[i].LIoOpSend?;
+      assert forall i :: 0 <= i < |net_event_log| - 1 ==> net_event_log[i].LIoOpReceive? || net_event_log[i+1].LIoOpSend?;
+
+
+      ghost var raft_server := old(server_impl.AbstractifyToRaftServer());
+      ghost var raft_server' := server_impl.AbstractifyToRaftServer();
+      ghost var raft_received_packet := AbstractifyCPacketToRaftPacket(rr.cpacket);
+      ghost var raft_sent_packets := ExtractSentPacketsFromIos(ios);
+
+      lemma_OnlySentPacketsLeft(ios, 1);
+      assert ExtractSentPacketsFromIos(ios) == ExtractSentPacketsFromIos(ios_tail);
+
+      reveal ExtractSentPacketsFromIos();
+      assert |raft_sent_packets| == 1;
+      assert raft_sent_packets[0].msg.RaftMessage_AppendEntries?;
+      reveal Q_RaftServer_Next_ProcessAppendEntriesReply();
+      assert Q_RaftServer_Next_ProcessAppendEntriesReply(raft_server, raft_server', raft_received_packet, raft_sent_packets);
+      reveal Q_RaftServer_Next_ProcessPacket();
+      assert Q_RaftServer_Next_ProcessPacket(raft_server, raft_server', ios);
+    }
+    reveal Q_RaftServer_Next_ProcessPacket();
+    assert Q_RaftServer_Next_ProcessPacket(old(server_impl.AbstractifyToRaftServer()), server_impl.AbstractifyToRaftServer(), ios);
+  } else {
+    reveal Q_RaftServer_Next_ProcessPacket();
+    assert Q_RaftServer_Next_ProcessPacket(old(server_impl.AbstractifyToRaftServer()), server_impl.AbstractifyToRaftServer(), ios);
+  }
+  reveal Q_RaftServer_Next_ProcessPacket();
+  assert Q_RaftServer_Next_ProcessPacket(old(server_impl.AbstractifyToRaftServer()), server_impl.AbstractifyToRaftServer(), ios);
 }
 
 //////////////////////////////////////////////////////////
 // Process RequestVote
 //////////////////////////////////////////////////////////
-method {:timeLimitMultiplier 2} Server_HandleReqeustVote(server_impl:ServerImpl, ghost old_net_history:seq<NetEvent>, rr:ReceiveResult, ghost receive_event:NetEvent) 
+method {:timeLimitMultiplier 2} Server_HandleReqeustVote(server_impl:ServerImpl, rr:ReceiveResult, ghost old_net_history:seq<NetEvent>, ghost receive_event:NetEvent) 
   returns (ok:bool, ghost net_event_log:seq<NetEvent>, ghost ios:seq<RaftIo>)
   // About recved things
-  requires receive_event.LIoOpReceive?
   requires rr.RRPacket?
-  requires NetPacketIsAbstractable(receive_event.r)
   requires rr.cpacket.msg.CMessage_RequestVote?
+  requires receive_event.LIoOpReceive?
+  requires NetPacketIsAbstractable(receive_event.r)
+  requires AbstractifyNetPacketToRaftPacket(receive_event.r) == AbstractifyCPacketToRaftPacket(rr.cpacket)
   // About server
   requires server_impl.Valid()
   requires server_impl.Env().net.history() == old_net_history + [receive_event]
@@ -292,7 +356,7 @@ method {:timeLimitMultiplier 2} Server_HandleReqeustVote(server_impl:ServerImpl,
   ensures ok ==> 
             && server_impl.Valid()
             && server_impl.nextActionIndex == old(server_impl.nextActionIndex)
-            // PROVE
+            // TOPROVE
             // && (|| Q_RaftServer_Next_ProcessPacket(old(server_impl.AbstractifyToRaftServer()), server_impl.AbstractifyToRaftServer(), ios)
             //     || (&& IosReflectIgnoringUnsendable(net_event_log)
             //        && old(server_impl.AbstractifyToRaftServer()) == server_impl.AbstractifyToRaftServer()))
@@ -361,13 +425,14 @@ method {:timeLimitMultiplier 2} Server_HandleReqeustVote(server_impl:ServerImpl,
 //////////////////////////////////////////////////////////
 // Process RequestVoteReply
 //////////////////////////////////////////////////////////
-method Server_HandleReqeustVoteReply(server_impl:ServerImpl, ghost old_net_history:seq<NetEvent>, rr:ReceiveResult, ghost receive_event:NetEvent) 
+method {:timeLimitMultiplier 8} Server_HandleReqeustVoteReply(server_impl:ServerImpl, rr:ReceiveResult, ghost old_net_history:seq<NetEvent>, ghost receive_event:NetEvent) 
   returns (ok:bool, ghost net_event_log:seq<NetEvent>, ghost ios:seq<RaftIo>)
   // About recved things
   requires receive_event.LIoOpReceive?
   requires rr.RRPacket?
   requires NetPacketIsAbstractable(receive_event.r)
   requires rr.cpacket.msg.CMessage_RequestVoteReply?
+  requires AbstractifyCPacketToRaftPacket(rr.cpacket) == AbstractifyNetPacketToRaftPacket(receive_event.r)
   // About server
   requires server_impl.Valid()
   requires server_impl.Env().net.history() == old_net_history + [receive_event]
@@ -381,10 +446,10 @@ method Server_HandleReqeustVoteReply(server_impl:ServerImpl, ghost old_net_histo
   ensures ok ==> 
             && server_impl.Valid()
             && server_impl.nextActionIndex == old(server_impl.nextActionIndex)
-            // PROVE
-            // && (|| Q_RaftServer_Next_ProcessPacket(old(server_impl.AbstractifyToRaftServer()), server_impl.AbstractifyToRaftServer(), ios)
-            //     || (&& IosReflectIgnoringUnsendable(net_event_log)
-            //        && old(server_impl.AbstractifyToRaftServer()) == server_impl.AbstractifyToRaftServer()))
+            // TOPROVE
+            && (
+              || Q_RaftServer_Next_ProcessPacket(old(server_impl.AbstractifyToRaftServer()), server_impl.AbstractifyToRaftServer(), ios)
+            )
             && RawIoConsistentWithSpecIO(net_event_log, ios)
             && OnlySentMarshallableData(net_event_log)
             && old_net_history + net_event_log == server_impl.Env().net.history()
@@ -403,6 +468,8 @@ method Server_HandleReqeustVoteReply(server_impl:ServerImpl, ghost old_net_histo
     server_impl.state := server_impl.state.(current_term := msg.term, voted_for := None, role := Follower);
   }
 
+  var ep := rr.cpacket.src;
+  
   if (server_impl.state.role == Candidate && server_impl.state.current_term == msg.term) {
     // Record the vote
     server_impl.state := server_impl.state.(vote_granted := server_impl.state.vote_granted[rr.cpacket.src := msg.vote_granted]);
@@ -426,8 +493,31 @@ method Server_HandleReqeustVoteReply(server_impl:ServerImpl, ghost old_net_histo
       assert forall i::0<=i<|log_tail| ==> log_tail[i].LIoOpSend? && ios_tail[i].LIoOpSend?;
       assert forall i :: 1 <= i < |net_event_log| ==> net_event_log[i].LIoOpSend?;
       assert forall i :: 0 <= i < |net_event_log| - 1 ==> net_event_log[i].LIoOpReceive? || net_event_log[i+1].LIoOpSend?;
+      assert server_impl.state.role == Leader;
+
+      ghost var raft_server := old(server_impl.AbstractifyToRaftServer());
+      ghost var raft_server' := server_impl.AbstractifyToRaftServer();
+      ghost var raft_received_packet := AbstractifyCPacketToRaftPacket(rr.cpacket);
+      ghost var raft_sent_packets := ExtractSentPacketsFromIos(ios);
+      
+      assert raft_received_packet.msg.RaftMessage_RequestVoteReply?;
+      assert ios[0].r.msg.RaftMessage_RequestVoteReply?;
+
+      reveal Q_RaftServer_Next_ProcessRequestVoteReply();
+      assert Q_RaftServer_Next_ProcessRequestVoteReply(raft_server, raft_server', raft_received_packet, raft_sent_packets);
+    } else {
     }
   }
+  ghost var raft_server := old(server_impl.AbstractifyToRaftServer());
+  ghost var raft_server' := server_impl.AbstractifyToRaftServer();
+  ghost var raft_received_packet := AbstractifyCPacketToRaftPacket(rr.cpacket);
+  ghost var raft_sent_packets := ExtractSentPacketsFromIos(ios);
+
+  reveal Q_RaftServer_Next_ProcessRequestVoteReply();
+  assert Q_RaftServer_Next_ProcessRequestVoteReply(raft_server, raft_server', raft_received_packet, raft_sent_packets);
+
+  reveal Q_RaftServer_Next_ProcessPacket();
+  assert Q_RaftServer_Next_ProcessPacket(raft_server, raft_server', ios);
 }
 
 
@@ -446,7 +536,7 @@ method Server_Next_ProcessPacketX(server_impl:ServerImpl)
   ensures ok ==> 
             && server_impl.Valid()
             && server_impl.nextActionIndex == old(server_impl.nextActionIndex)
-            // PROVE
+            // TOPROVE
             // && (|| Q_RaftServer_Next_ProcessPacket(old(server_impl.AbstractifyToRaftServer()), server_impl.AbstractifyToRaftServer(), ios)
             //     || (&& IosReflectIgnoringUnsendable(net_event_log)
             //        && old(server_impl.AbstractifyToRaftServer()) == server_impl.AbstractifyToRaftServer()))
@@ -485,7 +575,7 @@ method Server_Next_ProcessPacketX(server_impl:ServerImpl)
     if (msg.CMessage_Request? || msg.CMessage_Reply?) {
       if (msg.CMessage_Request?) {
         print "server ", my_idx, "(", server_impl.state.current_term, ",is_leader=", server_impl.state.role.Leader?, ") received a request(", msg.seqno_req, ", ", msg.req, ")\n";
-        ok, net_event_log, ios := Server_Next_ProcessRequest(server_impl, old_net_history, rr, receive_event);
+        ok, net_event_log, ios := Server_Next_ProcessRequest(server_impl, rr, old_net_history, receive_event);
       } else {
         return;
       }
@@ -505,21 +595,21 @@ method Server_Next_ProcessPacketX(server_impl:ServerImpl)
         }
         print "server ", my_idx, "(", server_impl.state.current_term, ",is_leader=", server_impl.state.role.Leader?, ",leader=", if server_impl.state.current_leader.Some? then server_impl.state.current_leader.v else 0xFFFF_FFFF_FFFF_FFFF, 
           ") received from ", src_id, "AppendEntries(|entries|=", |msg.entries|, ",prev_log_index=", msg.prev_log_index, ")\n";
-        ok, net_event_log, ios := Server_HandleAppendEntries(server_impl, rr, old_net_history, receive_event, receive_io);
+        ok, net_event_log, ios := Server_HandleAppendEntries(server_impl, rr, old_net_history, receive_event);
       } else if (msg.CMessage_AppendEntriesReply?) {
         if (server_impl.state.role != Leader) {
           return;
         }
         print "server ", my_idx, "(", server_impl.state.current_term, ",is_leader=", server_impl.state.role.Leader?, ",leader=", if server_impl.state.current_leader.Some? then server_impl.state.current_leader.v else 0xFFFF_FFFF_FFFF_FFFF, 
           ") received from ", src_id, " AppendEntriesReply(term=", msg.term, ",success=", msg.success, ",match_index=", msg.match_index, ",commit=", server_impl.state.commit_index, ")\n";
-        ok, net_event_log, ios := Server_HandleAppendEntriesReply(server_impl, old_net_history, rr, receive_event);
+        ok, net_event_log, ios := Server_HandleAppendEntriesReply(server_impl, rr, old_net_history, receive_event);
       } else if (msg.CMessage_RequestVote?) {
         print "server ", my_idx, "(", server_impl.state.current_term, ",is_leader=", server_impl.state.role.Leader?, ",leader=", if server_impl.state.current_leader.Some? then server_impl.state.current_leader.v else 0xFFFF_FFFF_FFFF_FFFF, ",commit=", server_impl.state.commit_index, ") received from ", src_id, " RequestVote(term=", msg.term, ")\n";
-        ok, net_event_log, ios := Server_HandleReqeustVote(server_impl, old_net_history, rr, receive_event); 
+        ok, net_event_log, ios := Server_HandleReqeustVote(server_impl, rr, old_net_history, receive_event); 
       } else {
         assert msg.CMessage_RequestVoteReply?;
         print "server ", my_idx, "(", server_impl.state.current_term, ",is_leader=", server_impl.state.role.Leader?, ",leader=", if server_impl.state.current_leader.Some? then server_impl.state.current_leader.v else 0xFFFF_FFFF_FFFF_FFFF, ") received from ", src_id, " RequestVoteReply(term=", msg.term, ",granted=", msg.vote_granted, ")\n";
-        ok, net_event_log, ios := Server_HandleReqeustVoteReply(server_impl, old_net_history, rr, receive_event);
+        ok, net_event_log, ios := Server_HandleReqeustVoteReply(server_impl, rr, old_net_history, receive_event);
         return;
       }
     }

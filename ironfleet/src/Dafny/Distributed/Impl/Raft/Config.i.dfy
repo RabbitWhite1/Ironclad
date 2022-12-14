@@ -29,7 +29,7 @@ datatype ParamState = ParamState(
 
 predicate ParamStateIsValid(params:ParamState)
 {
-  && params.min_election_timeout < params.max_election_timeout
+  && 0 < params.min_election_timeout < params.max_election_timeout
   && params.heartbeat_timeout > 0
   && params.max_integer_value > 0
 }
@@ -117,6 +117,7 @@ predicate ConfigStateIsValid(config:ConfigState)
   && ConfigStateIsAbstractable(config)
   && ParamStateIsValid(config.params)
   && RaftMinQuorumSize(AbstractifyConfigStateToRaftConfig(config)) <= |config.server_eps|
+  && SeqIsUnique(config.server_eps)
 }
 
 method GetEndPointIndex(global_config:ConfigState, ep:EndPoint) returns(index:uint64)

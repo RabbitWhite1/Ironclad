@@ -50,8 +50,6 @@ predicate method ValidLogEntry(entry:CLogEntry) {
   && EndPointIsValidPublicKey(entry.client_ep)
 }
 
-function method LogEntrySeqSizeLimit() : int { 100 }
-
 predicate method LogEntrySeqIndexIncreasing(log:seq<CLogEntry>) 
   requires forall i :: 0 <= i < |log| ==> ValidLogEntry(log[i])
 {

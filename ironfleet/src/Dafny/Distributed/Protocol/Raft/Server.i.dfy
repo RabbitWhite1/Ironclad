@@ -40,7 +40,7 @@ datatype RaftServer = RaftServer(
   next_index:map<EndPoint, int>,
   match_index:map<EndPoint, int>,
   num_replicated:seq<int>, // log index -> num of replicated
-  vote_granted:map<EndPoint, int>, // server_id -> voted?(bool)
+  vote_granted:map<EndPoint, bool>, // server_id -> voted?(bool)
   // App
   app:AppState
 )
@@ -107,6 +107,24 @@ function {:opaque} ExtractSentPacketsFromIos(ios:seq<RaftIo>) : seq<RaftPacket>
     [ios[0].s] + ExtractSentPacketsFromIos(ios[1..])
   else
     ExtractSentPacketsFromIos(ios[1..])
+}
+
+lemma {:opaque} lemma_NoSentPacketsExtraction(ios:seq<RaftIo>)
+  requires forall i :: 0 <= i < |ios| ==> !ios[i].LIoOpSend?
+  ensures ExtractSentPacketsFromIos(ios) == []
+{
+  reveal ExtractSentPacketsFromIos();
+  for i := 0 to |ios|
+    invariant forall i_ :: 0 <= i_ < i ==> !ios[i_].LIoOpSend?
+    invariant ExtractSentPacketsFromIos(ios) == ExtractSentPacketsFromIos(ios[i..])
+  {
+    calc {
+      ExtractSentPacketsFromIos(ios[i..]);
+      ExtractSentPacketsFromIos([ios[i]] + ios[i+1..]);
+      ExtractSentPacketsFromIos(ios[i+1..]);
+    }
+  }
+  assert ExtractSentPacketsFromIos(ios) == [];
 }
 
 lemma {:opaque} lemma_OnlySentPacketsLeft(ios:seq<RaftIo>, sent_begin_index:int)
@@ -198,15 +216,53 @@ predicate RaftServerNextReadClock(s:RaftServer, s':RaftServer, ios:seq<RaftIo>)
   )
 }
 
+
+//////////////////////////////////////////////////////////
+// Process AppendEntries
+//////////////////////////////////////////////////////////
+lemma lemma_MaybeOneMore_CountGreaterOrEqual(eps:seq<EndPoint>, end1:int, end2:int, numbers:map<EndPoint, int>, threshold:int)
+  requires 0 <= end1 <= |eps|
+  requires 0 <= end2 <= |eps|
+  requires (forall ep :: ep in eps[..end1] ==> ep in numbers)
+  requires (forall ep :: ep in eps[..end2] ==> ep in numbers)
+  requires end2 == end1 + 1
+  ensures (
+    if numbers[eps[end1]] >= threshold then
+      CountGreaterOrEqual(eps[..end1], numbers, threshold) + 1 == CountGreaterOrEqual(eps[..end2], numbers, threshold)
+    else
+      CountGreaterOrEqual(eps[..end1], numbers, threshold) == CountGreaterOrEqual(eps[..end2], numbers, threshold)
+  )
+{
+    if numbers[eps[end1]] >= threshold {
+      calc {
+        CountGreaterOrEqual(eps[..end2], numbers, threshold);
+        { assert eps[..end2] == eps[..end1] + [eps[end1]]; }
+        CountGreaterOrEqual(eps[..end1] + [eps[end1]], numbers, threshold);
+        { assert numbers[eps[end1]] >= threshold; }
+        CountGreaterOrEqual(eps[..end1], numbers, threshold) + CountGreaterOrEqual([eps[end1]], numbers, threshold);
+        CountGreaterOrEqual(eps[..end1], numbers, threshold) + 1;
+      }
+    } else {
+      calc {
+        CountGreaterOrEqual(eps[..end2], numbers, threshold);
+        { assert eps[..end2] == eps[..end1] + [eps[end1]]; }
+        CountGreaterOrEqual(eps[..end1] + [eps[end1]], numbers, threshold);
+        { assert !(numbers[eps[end1]] >= threshold); }
+        CountGreaterOrEqual(eps[..end1], numbers, threshold) + CountGreaterOrEqual([eps[end1]], numbers, threshold);
+        CountGreaterOrEqual(eps[..end1], numbers, threshold);
+      }
+    }
+}
+
 function CountGreaterOrEqual(eps:seq<EndPoint>, numbers:map<EndPoint, int>, threshold:int) : int
   requires (forall ep :: ep in eps ==> ep in numbers)
 {
   if |eps| == 0 then
     0
-  else if numbers[eps[0]] >= threshold then
-    1 + CountGreaterOrEqual(eps[1..], numbers, threshold)
+  else if numbers[eps[|eps|-1]] >= threshold then
+    1 + CountGreaterOrEqual(eps[..|eps|-1], numbers, threshold)
   else
-    CountGreaterOrEqual(eps[1..], numbers, threshold)
+    CountGreaterOrEqual(eps[..|eps|-1], numbers, threshold)
 }
 
 predicate RaftServerNextProcessAppendEntries_GoodReply(s:RaftServer, s':RaftServer, received_packet:RaftPacket, sent_packet:RaftPacket)
@@ -269,18 +325,42 @@ predicate RaftServerNextProcessAppendEntries(s:RaftServer, s':RaftServer, raft_p
 }
 
 
-predicate RaftServerNextProcessAppendEntriesReply(s:RaftServer, s':RaftServer, received_packet:RaftPacket, ios:seq<RaftIo>)
-  requires |ios| >= 2
-  requires ios[0].LIoOpReceive?
-  requires ios[1].LIoOpReadClock?
-  requires ios[0].r == received_packet
-  requires ios[0].r.msg.RaftMessage_AppendEntriesReply?
+//////////////////////////////////////////////////////////
+// Process AppendEntriesReply
+//////////////////////////////////////////////////////////
+predicate RaftServer_GoodSentAppendEntries(s':RaftServer, ep:EndPoint, sent_packet:RaftPacket)
+  requires |s'.log| >= 1
+  requires WellFormedRaftServerConfig(s'.config)
+  requires ep in s'.next_index
+  requires ep in s'.match_index
+  requires 1 <= s'.next_index[ep] <= |s'.log|
+{
+  var next_index := s'.next_index[ep];
+  var log_index_end := if |s'.log| < next_index + LogEntrySeqSizeLimit() then |s'.log| else next_index + LogEntrySeqSizeLimit();
+
+  && sent_packet.msg.RaftMessage_AppendEntries?
+  && sent_packet.msg.term == s'.current_term
+  && sent_packet.msg.leader_ep == s'.config.global_config.server_eps[s'.config.server_id]
+  && sent_packet.msg.prev_log_index == next_index - 1
+  && sent_packet.msg.prev_log_term == (if next_index == 0 then 0 else s'.log[next_index - 1].term)
+  // && sent_packet.msg.entries == s'.log[next_index..log_index_end]
+  && sent_packet.msg.leader_commit == s'.commit_index
+  // && sent_packet.msg == RaftMessage_AppendEntries(
+  //   s'.current_term,
+  //   s'.config.global_config.server_eps[s'.config.server_id],
+  //   next_index - 1,
+  //   if next_index == 0 then 0 else s'.log[next_index - 1].term,
+  //   s'.log[next_index..log_index_end],
+  //   s'.commit_index
+  // )
+}
+
+predicate RaftServerNextProcessAppendEntriesReply(s:RaftServer, s':RaftServer, received_packet:RaftPacket, sent_packets:seq<RaftPacket>)
+  requires received_packet.msg.RaftMessage_AppendEntriesReply?
 {
   var received_msg := received_packet.msg;
-  var clock := SpontaneousClock(ios);
-  var sent_packets := ExtractSentPacketsFromIos(ios);
   var ep := received_packet.src;
-  && forall packet :: packet in sent_packets ==> packet.msg.RaftMessage_AppendEntries?
+
   && (
     if (s.current_term < received_msg.term) then
       && s'.current_term == received_msg.term
@@ -292,6 +372,7 @@ predicate RaftServerNextProcessAppendEntriesReply(s:RaftServer, s':RaftServer, r
   && (
     if s'.role == Leader && s'.current_term == received_msg.term then
       if received_msg.success == true then
+        // true
         && ep in s.match_index
         && (
           if received_msg.match_index > s.match_index[ep] then
@@ -299,7 +380,7 @@ predicate RaftServerNextProcessAppendEntriesReply(s:RaftServer, s':RaftServer, r
           else
             && s'.match_index == s.match_index
         )
-        && s'.next_index == s.match_index[ep := s.match_index[ep] + 1]
+        && s'.next_index == s.next_index[ep := s'.match_index[ep] + 1]
         && (forall ep :: ep in s'.config.global_config.server_eps ==> ep in s'.match_index)
         && (forall i :: s.commit_index < i <= s'.commit_index ==> 
           CountGreaterOrEqual(s'.config.global_config.server_eps, s'.match_index, i) >= RaftMinQuorumSize(s'.config.global_config)
@@ -309,13 +390,117 @@ predicate RaftServerNextProcessAppendEntriesReply(s:RaftServer, s':RaftServer, r
         && ep in s.match_index
         && ep in s'.next_index
         && ep in s'.match_index
+        && ep in s'.config.global_config.server_eps
         && s'.match_index == s'.match_index[ep := 0]
         && (s.next_index[ep] == 1 || s'.next_index[ep] <= s.next_index[ep])
+        && s'.role == Leader
+        && 1 <= s'.next_index[ep] <= |s'.log|
+        && WellFormedRaftServerConfig(s'.config)
+        && |sent_packets| == 1
+        && RaftServer_GoodSentAppendEntries(s', ep, sent_packets[0])
     else
       true
   )
-
 }
+
+
+//////////////////////////////////////////////////////////
+// Process RequestVote
+//////////////////////////////////////////////////////////
+predicate RaftServerNextProcessRequestVote(s:RaftServer, s':RaftServer, raft_packet:RaftPacket, clock:int, sent_packets:seq<RaftPacket>)
+  requires raft_packet.msg.RaftMessage_RequestVote?
+{
+  true
+}
+
+
+//////////////////////////////////////////////////////////
+// Process RequestVoteReply
+//////////////////////////////////////////////////////////
+function CountVoted(eps:seq<EndPoint>, vote_granted:map<EndPoint, bool>):int
+  requires (forall ep :: ep in eps ==> ep in vote_granted)
+{
+  if |eps| == 0 then
+    0
+  else if vote_granted[eps[|eps|-1]] == true then
+    1 + CountVoted(eps[..|eps|-1], vote_granted)
+  else
+    CountVoted(eps[..|eps|-1], vote_granted)
+}
+
+lemma lemma_MaybeOneMore_CountVoted(eps:seq<EndPoint>, end1:int, end2:int, vote_granted:map<EndPoint, bool>)
+  requires 0 <= end1 <= |eps|
+  requires 0 <= end2 <= |eps|
+  requires (forall ep :: ep in eps[..end1] ==> ep in vote_granted)
+  requires (forall ep :: ep in eps[..end2] ==> ep in vote_granted)
+  requires end2 == end1 + 1
+  ensures (
+    if vote_granted[eps[end1]] == true then
+      CountVoted(eps[..end1], vote_granted) + 1 == CountVoted(eps[..end2], vote_granted)
+    else
+      CountVoted(eps[..end1], vote_granted) == CountVoted(eps[..end2], vote_granted)
+  )
+{
+    if vote_granted[eps[end1]] {
+      calc {
+        CountVoted(eps[..end2], vote_granted);
+        { assert eps[..end2] == eps[..end1] + [eps[end1]]; }
+        CountVoted(eps[..end1] + [eps[end1]], vote_granted);
+        { assert vote_granted[eps[end1]]; }
+        CountVoted(eps[..end1], vote_granted) + CountVoted([eps[end1]], vote_granted);
+        CountVoted(eps[..end1], vote_granted) + 1;
+      }
+    } else {
+      calc {
+        CountVoted(eps[..end2], vote_granted);
+        { assert eps[..end2] == eps[..end1] + [eps[end1]]; }
+        CountVoted(eps[..end1] + [eps[end1]], vote_granted);
+        { assert !(vote_granted[eps[end1]]); }
+        CountVoted(eps[..end1], vote_granted) + CountVoted([eps[end1]], vote_granted);
+        CountVoted(eps[..end1], vote_granted);
+      }
+    }
+}
+
+predicate RaftServerQuorumVoted(s':RaftServer)
+{
+  true
+}
+
+predicate RaftServerNextProcessRequestVoteReply(s:RaftServer, s':RaftServer, raft_packet:RaftPacket, sent_packets:seq<RaftPacket>)
+  requires raft_packet.msg.RaftMessage_RequestVoteReply?
+{
+  var ep := raft_packet.src;
+  var msg := raft_packet.msg;
+  var eps := s'.config.global_config.server_eps;
+  && (
+    if s.role == Candidate && s.current_term == s'.current_term == msg.term then
+      && (forall ep :: ep in eps ==> ep in s'.vote_granted)
+      && (
+        if CountVoted(eps, s'.vote_granted) >= RaftMinQuorumSize(s'.config.global_config) && sent_packets != [] then
+          // true
+          && s'.role == Leader
+          && |s'.log| >= 1
+          && WellFormedRaftServerConfig(s'.config)
+          && (
+            forall packet :: packet in sent_packets ==> (
+              && packet.dst in s'.config.global_config.server_eps 
+              && packet.dst in s'.next_index
+              && packet.dst in s'.match_index
+              && 1 <= s'.next_index[packet.dst] <= |s'.log|
+              // TOPROVE
+              // && RaftServer_GoodSentAppendEntries(s', packet.dst , packet)
+              
+            )
+          )
+        else
+          && true
+      )
+    else
+      && true
+  )
+}
+
 
 predicate RaftServerNextProcessPacket(s:RaftServer, s':RaftServer, ios:seq<RaftIo>)
 {
@@ -327,10 +512,10 @@ predicate RaftServerNextProcessPacket(s:RaftServer, s':RaftServer, ios:seq<RaftI
 
     match ios[0].r.msg
       case RaftMessage_Invalid() => (s == s' && sent_packets == [])
-      case RaftMessage_RequestVote(_,_,_,_) => (s == s' && sent_packets == [])
-      case RaftMessage_RequestVoteReply(_,_) => (s == s' && sent_packets == [])
-      case RaftMessage_AppendEntries(_,_,_,_,_,_) => true//RaftServerNextProcessAppendEntries(s, s', ios[0].r, potential_clock, sent_packets)
-      case RaftMessage_AppendEntriesReply(_,_,_) => (s == s' && sent_packets == [])
+      case RaftMessage_RequestVote(_,_,_,_) => RaftServerNextProcessRequestVote(s, s', ios[0].r, potential_clock, sent_packets)
+      case RaftMessage_RequestVoteReply(_,_) => RaftServerNextProcessRequestVoteReply(s, s', ios[0].r, sent_packets)
+      case RaftMessage_AppendEntries(_,_,_,_,_,_) => RaftServerNextProcessAppendEntries(s, s', ios[0].r, potential_clock, sent_packets)
+      case RaftMessage_AppendEntriesReply(_,_,_) => RaftServerNextProcessAppendEntriesReply(s, s', ios[0].r, sent_packets)
       case RaftMessage_Request(_,_) => (s == s' && sent_packets == [])
       case RaftMessage_Reply(_,_,_,_) => (s == s' && sent_packets == [])
   )

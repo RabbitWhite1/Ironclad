@@ -33,5 +33,7 @@ datatype RaftRole = Follower | Candidate | Leader
 
 datatype ClockReading = ClockReading(t:int)
 
+function method LogEntrySeqSizeLimit() : int { 100 }
+
 
 }

@@ -172,17 +172,14 @@ method {:timeLimitMultiplier 2} Server_HandleAppendEntries_TryToAppendAndSend(se
   assert Q_RaftServer_Next_ProcessAppendEntries_GoodReply(raft_server, raft_server', raft_recv_packet, raft_sent_packet);
 }
 
-method {:timeLimitMultiplier 8} Server_HandleAppendEntries(server_impl:ServerImpl, rr:ReceiveResult, ghost old_net_history:seq<NetEvent>, ghost receive_event:NetEvent, ghost receive_io:RaftIo) 
+method {:timeLimitMultiplier 8} Server_HandleAppendEntries(server_impl:ServerImpl, rr:ReceiveResult, ghost old_net_history:seq<NetEvent>, ghost receive_event:NetEvent) 
   returns (ok:bool, ghost net_event_log:seq<NetEvent>, ghost ios:seq<RaftIo>)
   // About recved things
   requires receive_event.LIoOpReceive?
   requires rr.RRPacket?
   requires NetPacketIsAbstractable(receive_event.r)
   requires rr.cpacket.msg.CMessage_AppendEntries?
-  requires receive_io.LIoOpReceive?
-  requires receive_io.r == AbstractifyCPacketToRaftPacket(rr.cpacket)
-  requires receive_io == LIoOpReceive(AbstractifyNetPacketToRaftPacket(receive_event.r));
-  // requires server_impl.ReceivedPacketProperties(rr.cpacket, receive_event, receive_io)
+  requires AbstractifyCPacketToRaftPacket(rr.cpacket) == AbstractifyNetPacketToRaftPacket(receive_event.r)
   // About server
   requires server_impl.Valid()
   requires server_impl.Env().net.history() == old_net_history + [receive_event]
@@ -204,6 +201,7 @@ method {:timeLimitMultiplier 8} Server_HandleAppendEntries(server_impl:ServerImp
             && old_net_history + net_event_log == server_impl.Env().net.history()
             && (forall i :: 0 <= i < |net_event_log| - 1 ==> net_event_log[i].LIoOpReceive? || net_event_log[i+1].LIoOpSend?)
 {
+  ghost var receive_io := LIoOpReceive(AbstractifyNetPacketToRaftPacket(receive_event.r));
   var msg := rr.cpacket.msg;
   net_event_log := [receive_event];
   ios := [receive_io];
@@ -268,23 +266,19 @@ method {:timeLimitMultiplier 8} Server_HandleAppendEntries(server_impl:ServerImp
 
     assert AbstractifyCPacketToRaftPacket(rr.cpacket) == ios[0].r;
     assert clock_io.t == ios[1].t;
-    // assert forall io :: io in ios[2..] ==> io.LIoOpSend?;
     lemma_OnlySentPacketsLeft(ios, 2);
     assert ExtractSentPacketsFromIos(ios) == ExtractSentPacketsFromIos(ios[2..]) == ExtractSentPacketsFromIos(ios2);
 
     reveal Q_RaftServer_Next_ProcessAppendEntries();
     assert Q_RaftServer_Next_ProcessAppendEntries(raft_server, raft_server', raft_packet, clock_io.t, ExtractSentPacketsFromIos(ios));
 
-    // assert |ios| == 3;
-    // assert ios[0].LIoOpReceive?;
-    // assert ios[1].LIoOpReadClock?;
     reveal Q_RaftServer_Next_ProcessPacket();
     assert Q_RaftServer_Next_ProcessPacket(raft_server, raft_server', ios);
   } else {
     net_event_log := [receive_event];
     ios := [receive_io];
     ok := true;
-    // reveal Q_RaftServer_Next_ProcessPacket();
+    reveal Q_RaftServer_Next_ProcessPacket();
   }
 }
 

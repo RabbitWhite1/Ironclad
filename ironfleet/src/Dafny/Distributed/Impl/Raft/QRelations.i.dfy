@@ -36,6 +36,24 @@ predicate {:opaque} Q_RaftServer_Next_ProcessAppendEntries(server:RaftServer, se
   && RaftServerNextProcessAppendEntries(server, server', raft_packet, clock, sent_packets)
 }
 
+predicate {:opaque} Q_RaftServer_Next_ProcessAppendEntriesReply(server:RaftServer, server':RaftServer, raft_packet:RaftPacket, sent_packets:seq<RaftPacket>)
+{
+  && raft_packet.msg.RaftMessage_AppendEntriesReply?
+  && RaftServerNextProcessAppendEntriesReply(server, server', raft_packet, sent_packets)
+}
+
+predicate {:opaque} Q_RaftServer_Next_ProcessRequestVote(server:RaftServer, server':RaftServer, raft_packet:RaftPacket, clock:int, sent_packets:seq<RaftPacket>)
+{
+  && raft_packet.msg.RaftMessage_RequestVote?
+  && RaftServerNextProcessRequestVote(server, server', raft_packet, clock, sent_packets)
+}
+
+predicate {:opaque} Q_RaftServer_Next_ProcessRequestVoteReply(server:RaftServer, server':RaftServer, raft_packet:RaftPacket, sent_packets:seq<RaftPacket>)
+{
+  && raft_packet.msg.RaftMessage_RequestVoteReply?
+  && RaftServerNextProcessRequestVoteReply(server, server', raft_packet, sent_packets)
+}
+
 //////////////////////////////////////////////////////////
 // ReadClock
 //////////////////////////////////////////////////////////
